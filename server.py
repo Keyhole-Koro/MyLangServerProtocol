@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import json
 import re
 import sys
@@ -15,10 +14,6 @@ TOKEN_TYPES = [
     "parameter",
     "variable",
     "property",
-    "keyword",
-    "number",
-    "string",
-    "operator",
 ]
 TOKEN_MODIFIERS: List[str] = []
 TOKEN_TYPE_INDEX = {name: i for i, name in enumerate(TOKEN_TYPES)}
@@ -209,29 +204,32 @@ class LspServer:
     def semantic_tokens(self, text: str) -> List[int]:
         tokens: List[Tuple[int, int, int, str]] = []
         lines = text.splitlines()
+        protected = self.protected_spans(lines)
         for line_no, line in enumerate(lines):
-            for match in STRING_RE.finditer(line):
-                tokens.append((line_no, match.start(), match.end() - match.start(), "string"))
-            for match in CHAR_RE.finditer(line):
-                tokens.append((line_no, match.start(), match.end() - match.start(), "string"))
-            for match in NUMBER_RE.finditer(line):
-                tokens.append((line_no, match.start(), match.end() - match.start(), "number"))
             for match in PACKAGE_RE.finditer(line):
-                kw = match.group(1)
+                if self.is_protected(line_no, match.start(), match.end(), protected):
+                    continue
                 name = match.group(2)
-                tokens.append((line_no, match.start(1), len(kw), "keyword"))
                 if not name.startswith('"'):
                     tokens.append((line_no, match.start(2), len(name), "namespace"))
             for match in TYPEDEF_ALIAS_RE.finditer(line):
+                if self.is_protected(line_no, match.start(), match.end(), protected):
+                    continue
                 alias = match.group(1)
                 tokens.append((line_no, match.start(1), len(alias), "type"))
             for match in TYPEDEF_STRUCT_ALIAS_RE.finditer(line):
+                if self.is_protected(line_no, match.start(), match.end(), protected):
+                    continue
                 alias = match.group(1)
                 tokens.append((line_no, match.start(1), len(alias), "struct"))
             for match in STRUCT_NAME_RE.finditer(line):
+                if self.is_protected(line_no, match.start(), match.end(), protected):
+                    continue
                 name = match.group(1)
                 tokens.append((line_no, match.start(1), len(name), "struct"))
             for match in FUNCTION_DEF_RE.finditer(line):
+                if self.is_protected(line_no, match.start(), match.end(), protected):
+                    continue
                 ret_type, fn_name = match.group(1), match.group(2)
                 kind = "type" if ret_type[0].isupper() else "type" if ret_type in BUILTIN_TYPES else None
                 if kind:
@@ -255,28 +253,32 @@ class LspServer:
                                 tokens.append((line_no, name_start, len(name), "parameter"))
                         offset = part_start + len(part) + 1 if part_start >= 0 else offset + len(part) + 1
             for match in TYPE_USAGE_RE.finditer(line):
+                if self.is_protected(line_no, match.start(), match.end(), protected):
+                    continue
                 name = match.group(1)
                 token_type = "type" if (name in BUILTIN_TYPES or name[:1].isupper()) else None
                 if token_type:
                     tokens.append((line_no, match.start(1), len(name), token_type))
             for match in FUNCTION_CALL_RE.finditer(line):
+                if self.is_protected(line_no, match.start(), match.end(), protected):
+                    continue
                 name = match.group(1)
                 if name in KEYWORDS:
                     continue
                 tokens.append((line_no, match.start(1), len(name), "function"))
             for match in PROPERTY_RE.finditer(line):
+                if self.is_protected(line_no, match.start(), match.end(), protected):
+                    continue
                 name = match.group(1)
                 tokens.append((line_no, match.start(1), len(name), "property"))
             for match in IDENT_RE.finditer(line):
+                if self.is_protected(line_no, match.start(), match.end(), protected):
+                    continue
                 value = match.group(0)
-                if value in KEYWORDS:
-                    tokens.append((line_no, match.start(), len(value), "keyword"))
-                elif value in BOOLS:
+                if value in BOOLS:
                     tokens.append((line_no, match.start(), len(value), "variable"))
                 elif value in BUILTIN_TYPES:
                     tokens.append((line_no, match.start(), len(value), "type"))
-            for match in OPERATOR_RE.finditer(line):
-                tokens.append((line_no, match.start(), len(match.group(0)), "operator"))
 
         tokens.sort(key=lambda t: (t[0], t[1], -t[2]))
         filtered: List[Tuple[int, int, int, str]] = []
@@ -298,6 +300,87 @@ class LspServer:
             prev_line = line_no
             prev_start = start
         return encoded
+
+    def protected_spans(self, lines: List[str]) -> Dict[int, List[Tuple[int, int]]]:
+        spans: Dict[int, List[Tuple[int, int]]] = {}
+        in_block_comment = False
+        for line_no, line in enumerate(lines):
+            line_spans: List[Tuple[int, int]] = []
+            i = 0
+            while i < len(line):
+                if in_block_comment:
+                    end = line.find("*/", i)
+                    if end < 0:
+                        line_spans.append((i, len(line)))
+                        i = len(line)
+                        break
+                    line_spans.append((i, end + 2))
+                    i = end + 2
+                    in_block_comment = False
+                    continue
+
+                ch = line[i]
+                nxt = line[i + 1] if i + 1 < len(line) else ""
+
+                if ch == '"':
+                    end = i + 1
+                    escaped = False
+                    while end < len(line):
+                        if escaped:
+                            escaped = False
+                        elif line[end] == "\\":
+                            escaped = True
+                        elif line[end] == '"':
+                            end += 1
+                            break
+                        end += 1
+                    line_spans.append((i, end))
+                    i = end
+                    continue
+
+                if ch == "'":
+                    end = i + 1
+                    escaped = False
+                    while end < len(line):
+                        if escaped:
+                            escaped = False
+                        elif line[end] == "\\":
+                            escaped = True
+                        elif line[end] == "'":
+                            end += 1
+                            break
+                        end += 1
+                    line_spans.append((i, end))
+                    i = end
+                    continue
+
+                if ch == "/" and nxt == "/":
+                    line_spans.append((i, len(line)))
+                    i = len(line)
+                    break
+
+                if ch == "/" and nxt == "*":
+                    end = line.find("*/", i + 2)
+                    if end < 0:
+                        line_spans.append((i, len(line)))
+                        in_block_comment = True
+                        i = len(line)
+                        break
+                    line_spans.append((i, end + 2))
+                    i = end + 2
+                    continue
+
+                i += 1
+
+            if line_spans:
+                spans[line_no] = line_spans
+        return spans
+
+    def is_protected(self, line_no: int, start: int, end: int, protected: Dict[int, List[Tuple[int, int]]]) -> bool:
+        for span_start, span_end in protected.get(line_no, []):
+            if start < span_end and end > span_start:
+                return True
+        return False
 
     def document_symbols(self, text: str) -> List[dict]:
         symbols = []
