@@ -6,7 +6,12 @@ from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
 
 TOKEN_TYPES = [
+    "comment",
+    "string",
+    "keyword",
+    "operator",
     "namespace",
+    "number",
     "type",
     "struct",
     "function",
@@ -31,8 +36,9 @@ IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 NUMBER_RE = re.compile(r"\b(?:0x[0-9A-Fa-f]+|[0-9]+)\b")
 STRING_RE = re.compile(r'"([^"\\]|\\.)*"')
 CHAR_RE = re.compile(r"'([^'\\]|\\.)*'")
-FUNCTION_DEF_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*(?:\*+\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*(?=\()")
-FUNCTION_CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*(?=\()")
+KEYWORD_PATTERN = r"(?:if|else|while|do|for|switch|case|default|break|continue|return|yield|of|import|from|export|package)"
+FUNCTION_DEF_RE = re.compile(rf"\b([A-Za-z_][A-Za-z0-9_]*)(?:[ \t]+|\*+[ \t]*)(?!(?:{KEYWORD_PATTERN})\b)([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?=\()")
+FUNCTION_CALL_RE = re.compile(rf"\b(?!(?:{KEYWORD_PATTERN})\b)([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?=\()")
 PACKAGE_RE = re.compile(r"\b(package|import|from)\s+([A-Za-z_][A-Za-z0-9_]*|\"[^\"]*\")")
 STRUCT_NAME_RE = re.compile(r"\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)")
 TYPEDEF_ALIAS_RE = re.compile(r"\btypedef\b[^;{}]*\b([A-Za-z_][A-Za-z0-9_]*)\s*;")
@@ -104,15 +110,21 @@ class LspServer:
                 return None
             if line in (b"\r\n", b"\n"):
                 break
-            key, _, value = line.decode("utf-8").partition(":")
-            headers[key.strip().lower()] = value.strip()
+            try:
+                key, _, value = line.decode("utf-8").partition(":")
+                headers[key.strip().lower()] = value.strip()
+            except Exception:
+                continue
         length = int(headers.get("content-length", "0"))
         if length <= 0:
             return None
         body = sys.stdin.buffer.read(length)
         if not body:
             return None
-        return json.loads(body.decode("utf-8"))
+        try:
+            return json.loads(body.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None
 
     def uri_to_path(self, uri: str) -> Optional[str]:
         if uri.startswith("file://"):
@@ -127,7 +139,8 @@ class LspServer:
         path = self.uri_to_path(uri)
         if path:
             try:
-                text = open(path, "r", encoding="utf-8").read()
+                with open(path, "r", encoding="utf-8") as f:
+                    text = f.read()
                 doc = Document(uri=uri, text=text, version=0)
                 self.docs[uri] = doc
                 return doc
@@ -137,10 +150,21 @@ class LspServer:
 
     def run(self) -> None:
         while self.running:
-            msg = self.read_message()
+            try:
+                msg = self.read_message()
+            except Exception:
+                break
             if msg is None:
                 break
-            self.handle(msg)
+            try:
+                self.handle(msg)
+            except Exception as e:
+                id_value = msg.get("id") if isinstance(msg, dict) else None
+                if id_value is not None:
+                    try:
+                        self.send_error(id_value, -32603, f"Internal error: {e}")
+                    except Exception:
+                        pass
 
     def handle(self, msg: dict) -> None:
         method = msg.get("method")
@@ -190,22 +214,75 @@ class LspServer:
             self.docs.pop(td["uri"], None)
             return
         if method == "textDocument/semanticTokens/full":
-            doc = self.get_doc(params["textDocument"]["uri"])
-            self.send_response(id_value, {"data": self.semantic_tokens(doc.text if doc else "")})
+            uri = params["textDocument"]["uri"]
+            doc = self.get_doc(uri)
+            if doc is None:
+                self.send_error(id_value, -32602, f"Document not found: {uri}")
+                return
+            self.send_response(id_value, {"data": self.semantic_tokens(doc.text)})
             return
         if method == "textDocument/documentSymbol":
-            doc = self.get_doc(params["textDocument"]["uri"])
-            self.send_response(id_value, self.document_symbols(doc.text if doc else ""))
+            uri = params["textDocument"]["uri"]
+            doc = self.get_doc(uri)
+            if doc is None:
+                self.send_error(id_value, -32602, f"Document not found: {uri}")
+                return
+            self.send_response(id_value, self.document_symbols(doc.text))
             return
 
         if id_value is not None:
             self.send_error(id_value, -32601, f"Method not found: {method}")
+
+    def find_matching_close_paren(self, line: str, open_pos: int) -> int:
+        depth = 1
+        i = open_pos + 1
+        while i < len(line):
+            if line[i] == "(":
+                depth += 1
+            elif line[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    return i
+            i += 1
+        return -1
+
+    def split_params(self, params: str) -> List[str]:
+        parts: List[str] = []
+        depth = 0
+        current: List[str] = []
+        for ch in params:
+            if ch in ("(", "["):
+                depth += 1
+            elif ch in (")", "]"):
+                depth -= 1
+            if ch == "," and depth == 0:
+                parts.append("".join(current))
+                current = []
+            else:
+                current.append(ch)
+        if current:
+            parts.append("".join(current))
+        return parts
 
     def semantic_tokens(self, text: str) -> List[int]:
         tokens: List[Tuple[int, int, int, str]] = []
         lines = text.splitlines()
         protected = self.protected_spans(lines)
         for line_no, line in enumerate(lines):
+            for span_start, span_end in protected.get(line_no, []):
+                if span_start >= len(line):
+                    continue
+                first = line[span_start]
+                if first == "/" and span_start + 1 < len(line) and line[span_start + 1] in ("/", "*"):
+                    tokens.append((line_no, span_start, span_end - span_start, "comment"))
+                elif first in ('"', "'"):
+                    tokens.append((line_no, span_start, span_end - span_start, "string"))
+            for match in IDENT_RE.finditer(line):
+                if self.is_protected(line_no, match.start(), match.end(), protected):
+                    continue
+                value = match.group(0)
+                if value in KEYWORDS:
+                    tokens.append((line_no, match.start(), len(value), "keyword"))
             for match in PACKAGE_RE.finditer(line):
                 if self.is_protected(line_no, match.start(), match.end(), protected):
                     continue
@@ -236,11 +313,11 @@ class LspServer:
                     tokens.append((line_no, match.start(1), len(ret_type), kind))
                 tokens.append((line_no, match.start(2), len(fn_name), "function"))
                 open_paren = line.find("(", match.end())
-                close_paren = line.find(")", open_paren + 1) if open_paren >= 0 else -1
+                close_paren = self.find_matching_close_paren(line, open_paren) if open_paren >= 0 else -1
                 if open_paren >= 0 and close_paren > open_paren:
                     params = line[open_paren + 1:close_paren]
                     offset = open_paren + 1
-                    for part in PARAM_SPLIT_RE.split(params):
+                    for part in self.split_params(params):
                         m = PARAM_NAME_RE.search(part.strip())
                         if not m:
                             offset += len(part) + 1
@@ -271,6 +348,14 @@ class LspServer:
                     continue
                 name = match.group(1)
                 tokens.append((line_no, match.start(1), len(name), "property"))
+            for match in NUMBER_RE.finditer(line):
+                if self.is_protected(line_no, match.start(), match.end(), protected):
+                    continue
+                tokens.append((line_no, match.start(), len(match.group(0)), "number"))
+            for match in OPERATOR_RE.finditer(line):
+                if self.is_protected(line_no, match.start(), match.end(), protected):
+                    continue
+                tokens.append((line_no, match.start(), len(match.group(0)), "operator"))
             for match in IDENT_RE.finditer(line):
                 if self.is_protected(line_no, match.start(), match.end(), protected):
                     continue
@@ -279,6 +364,8 @@ class LspServer:
                     tokens.append((line_no, match.start(), len(value), "variable"))
                 elif value in BUILTIN_TYPES:
                     tokens.append((line_no, match.start(), len(value), "type"))
+                elif value not in KEYWORDS:
+                    tokens.append((line_no, match.start(), len(value), "variable"))
 
         tokens.sort(key=lambda t: (t[0], t[1], -t[2]))
         filtered: List[Tuple[int, int, int, str]] = []
