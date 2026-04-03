@@ -10,6 +10,8 @@ TOKEN_TYPES = [
     "string",
     "keyword",
     "operator",
+    "ownershipRef",
+    "ownershipMut",
     "namespace",
     "number",
     "type",
@@ -27,8 +29,10 @@ KEYWORDS = {
     "if", "else", "while", "do", "for", "switch", "case", "default",
     "break", "continue", "return", "yield", "of", "import", "from",
     "export", "package", "typedef", "struct", "const", "static", "extern",
-    "auto", "register", "union", "enum",
+    "auto", "register", "union", "enum", "ref", "mut", "unchecked",
 }
+OWNERSHIP_REF_WORDS = {"ref"}
+OWNERSHIP_MUT_WORDS = {"mut"}
 BUILTIN_TYPES = {"bool", "i8", "i16", "i32", "u8", "u16", "u32", "char", "float", "double", "void", "long", "short"}
 BOOLS = {"true", "false", "null"}
 TYPE_NAME_RE = re.compile(r"\b[A-Z][A-Za-z0-9_]*\b")
@@ -47,6 +51,7 @@ TYPE_USAGE_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\b(?=\s*(?:\*+\s*)?[A-Za-
 PARAM_SPLIT_RE = re.compile(r",")
 PARAM_NAME_RE = re.compile(r"(?:\b[A-Za-z_][A-Za-z0-9_]*\b\s*(?:\*+\s*)?)([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\])?\s*$")
 PROPERTY_RE = re.compile(r"(?:\.|->)\s*([A-Za-z_][A-Za-z0-9_]*)")
+OWNERSHIP_OP_RE = re.compile(r"&mut\b|&(?!&)")
 OPERATOR_RE = re.compile(r"==|!=|<=|>=|&&|\|\||<<|>>|->|\+\+|--|[=+\-*/%<>&|^~?:!]")
 
 SYMBOL_KIND = {
@@ -277,10 +282,22 @@ class LspServer:
                     tokens.append((line_no, span_start, span_end - span_start, "comment"))
                 elif first in ('"', "'"):
                     tokens.append((line_no, span_start, span_end - span_start, "string"))
+            for match in OWNERSHIP_OP_RE.finditer(line):
+                if self.is_protected(line_no, match.start(), match.end(), protected):
+                    continue
+                value = match.group(0)
+                token_type = "ownershipMut" if value.startswith("&mut") else "ownershipRef"
+                tokens.append((line_no, match.start(), len(value), token_type))
             for match in IDENT_RE.finditer(line):
                 if self.is_protected(line_no, match.start(), match.end(), protected):
                     continue
                 value = match.group(0)
+                if value in OWNERSHIP_REF_WORDS:
+                    tokens.append((line_no, match.start(), len(value), "ownershipRef"))
+                    continue
+                if value in OWNERSHIP_MUT_WORDS:
+                    tokens.append((line_no, match.start(), len(value), "ownershipMut"))
+                    continue
                 if value in KEYWORDS:
                     tokens.append((line_no, match.start(), len(value), "keyword"))
             for match in PACKAGE_RE.finditer(line):
