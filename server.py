@@ -29,7 +29,7 @@ KEYWORDS = {
     "if", "else", "while", "do", "for", "switch", "case", "default",
     "break", "continue", "return", "yield", "of", "import", "from",
     "export", "package", "typedef", "struct", "const", "static", "extern",
-    "auto", "register", "union", "enum", "ref", "mut", "unchecked",
+    "auto", "register", "union", "enum", "ref", "mut", "unchecked", "rest",
 }
 OWNERSHIP_REF_WORDS = {"ref"}
 OWNERSHIP_MUT_WORDS = {"mut"}
@@ -40,7 +40,7 @@ IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 NUMBER_RE = re.compile(r"\b(?:0x[0-9A-Fa-f]+|[0-9]+)\b")
 STRING_RE = re.compile(r'"([^"\\]|\\.)*"')
 CHAR_RE = re.compile(r"'([^'\\]|\\.)*'")
-KEYWORD_PATTERN = r"(?:if|else|while|do|for|switch|case|default|break|continue|return|yield|of|import|from|export|package)"
+KEYWORD_PATTERN = r"(?:if|else|while|do|for|switch|case|default|break|continue|return|yield|of|import|from|export|package|rest)"
 FUNCTION_DEF_RE = re.compile(rf"\b([A-Za-z_][A-Za-z0-9_]*)(?:[ \t]+|\*+[ \t]*)(?!(?:{KEYWORD_PATTERN})\b)([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?=\()")
 FUNCTION_CALL_RE = re.compile(rf"\b(?!(?:{KEYWORD_PATTERN})\b)([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?=\()")
 PACKAGE_RE = re.compile(r"\b(package|import|from)\s+([A-Za-z_][A-Za-z0-9_]*|\"[^\"]*\")")
