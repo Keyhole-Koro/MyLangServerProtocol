@@ -1,7 +1,9 @@
 import json
+import subprocess
 import re
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
 
@@ -35,6 +37,7 @@ OWNERSHIP_REF_WORDS = {"ref"}
 OWNERSHIP_MUT_WORDS = {"mut"}
 BUILTIN_TYPES = {"bool", "i8", "i16", "i32", "u8", "u16", "u32", "char", "float", "double", "void", "long", "short"}
 BOOLS = {"true", "false", "null"}
+DIAGNOSTIC_SEVERITY_ERROR = 1
 TYPE_NAME_RE = re.compile(r"\b[A-Z][A-Za-z0-9_]*\b")
 IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 NUMBER_RE = re.compile(r"\b(?:0x[0-9A-Fa-f]+|[0-9]+)\b")
@@ -94,6 +97,20 @@ class LspServer:
     def __init__(self) -> None:
         self.docs: Dict[str, Document] = {}
         self.running = True
+        self.repo_root = Path(__file__).resolve().parents[2]
+        self.syntax_check_dir = self.repo_root / "toolchain" / "MyLangCompiler"
+        self.syntax_check_bin = self.syntax_check_dir / "mylang-syntax-check"
+        self.syntax_check_grammar = (
+            self.repo_root
+            / "toolchain"
+            / "MyLangSyntaxEngine"
+            / "tests"
+            / "fixtures"
+            / "grammars"
+            / "mylang_lsp.grammar"
+        )
+        self.syntax_check_build_attempted = False
+        self.syntax_check_proc: Optional[subprocess.Popen[bytes]] = None
 
     def send(self, payload: dict) -> None:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -202,21 +219,26 @@ class LspServer:
             self.send_response(id_value, None)
             return
         if method == "exit":
+            self.stop_syntax_checker()
             self.running = False
             return
         if method == "textDocument/didOpen":
             td = params["textDocument"]
             self.docs[td["uri"]] = Document(td["uri"], td.get("text", ""), td.get("version", 0))
+            self.publish_diagnostics(td["uri"], td.get("text", ""))
             return
         if method == "textDocument/didChange":
             td = params["textDocument"]
             changes = params.get("contentChanges", [])
             if changes:
-                self.docs[td["uri"]] = Document(td["uri"], changes[-1].get("text", ""), td.get("version", 0))
+                text = changes[-1].get("text", "")
+                self.docs[td["uri"]] = Document(td["uri"], text, td.get("version", 0))
+                self.publish_diagnostics(td["uri"], text)
             return
         if method == "textDocument/didClose":
             td = params["textDocument"]
             self.docs.pop(td["uri"], None)
+            self.clear_diagnostics(td["uri"])
             return
         if method == "textDocument/semanticTokens/full":
             uri = params["textDocument"]["uri"]
@@ -237,6 +259,195 @@ class LspServer:
 
         if id_value is not None:
             self.send_error(id_value, -32601, f"Method not found: {method}")
+
+    def publish_diagnostics(self, uri: str, text: str) -> None:
+        self.send({
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+                "uri": uri,
+                "diagnostics": self.syntax_diagnostics(text),
+            },
+        })
+
+    def clear_diagnostics(self, uri: str) -> None:
+        self.send({
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+                "uri": uri,
+                "diagnostics": [],
+            },
+        })
+
+    def syntax_diagnostics(self, text: str) -> List[dict]:
+        diagnostics = self.bracket_diagnostics(text)
+        if diagnostics:
+            return diagnostics
+        diagnostics.extend(self.lr1_diagnostics(text))
+        return diagnostics
+
+    def bracket_diagnostics(self, text: str) -> List[dict]:
+        lines = text.splitlines()
+        protected = self.protected_spans(lines)
+        stack: List[Tuple[str, int, int]] = []
+        diagnostics: List[dict] = []
+        pairs = {"(": ")", "{": "}", "[": "]"}
+        closers = {")": "(", "}": "{", "]": "["}
+
+        for line_no, line in enumerate(lines):
+            for char_no, ch in enumerate(line):
+                if self.is_protected(line_no, char_no, char_no + 1, protected):
+                    continue
+                if ch in pairs:
+                    stack.append((ch, line_no, char_no))
+                    continue
+                if ch not in closers:
+                    continue
+                if stack and stack[-1][0] == closers[ch]:
+                    stack.pop()
+                    continue
+                diagnostics.append(self.make_diagnostic(
+                    line_no,
+                    char_no,
+                    char_no + 1,
+                    f"Unexpected '{ch}'.",
+                ))
+
+        for opener, line_no, char_no in stack:
+            diagnostics.append(self.make_diagnostic(
+                line_no,
+                char_no,
+                char_no + 1,
+                f"Expected '{pairs[opener]}' before end of file.",
+            ))
+
+        return diagnostics
+
+    def lr1_diagnostics(self, text: str) -> List[dict]:
+        result = self.query_syntax_checker(text)
+        if not result:
+            return []
+        if result.get("status") == "ok":
+            return []
+
+        diagnostics = []
+        for diagnostic in result.get("diagnostics", []):
+            diagnostics.append(self.make_diagnostic(
+                int(diagnostic.get("line", 0)),
+                int(diagnostic.get("character", 0)),
+                int(diagnostic.get("endCharacter", int(diagnostic.get("character", 0)) + 1)),
+                str(diagnostic.get("message", "Syntax error.")),
+            ))
+        return diagnostics
+
+    def query_syntax_checker(self, text: str) -> Optional[dict]:
+        if not self.start_syntax_checker():
+            return None
+        if not self.syntax_check_proc or not self.syntax_check_proc.stdin:
+            return None
+
+        try:
+            data = text.encode("utf-8")
+            self.syntax_check_proc.stdin.write(f"content {len(data)}\n".encode("ascii"))
+            self.syntax_check_proc.stdin.write(data)
+            self.syntax_check_proc.stdin.write(b"\n")
+            self.syntax_check_proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            self.stop_syntax_checker()
+            return None
+
+        try:
+            line = self.read_syntax_checker_line()
+            if line is None:
+                self.stop_syntax_checker()
+                return None
+            return json.loads(line)
+        except (json.JSONDecodeError, OSError):
+            self.stop_syntax_checker()
+            return None
+
+    def start_syntax_checker(self) -> bool:
+        if self.syntax_check_proc and self.syntax_check_proc.poll() is None:
+            return True
+        if not self.ensure_syntax_checker_binary() or not self.syntax_check_grammar.exists():
+            return False
+
+        try:
+            self.syntax_check_proc = subprocess.Popen(
+                [str(self.syntax_check_bin), "--stdio", str(self.syntax_check_grammar)],
+                cwd=str(self.syntax_check_dir),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                bufsize=0,
+            )
+        except OSError:
+            self.syntax_check_proc = None
+            return False
+
+        line = self.read_syntax_checker_line()
+        if line and line.rstrip("\n") == "ready":
+            return True
+
+        self.stop_syntax_checker()
+        return False
+
+    def stop_syntax_checker(self) -> None:
+        proc = self.syntax_check_proc
+        self.syntax_check_proc = None
+        if not proc:
+            return
+        try:
+            proc.terminate()
+            proc.wait(timeout=1.0)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    def read_syntax_checker_line(self) -> Optional[str]:
+        proc = self.syntax_check_proc
+        if not proc or not proc.stdout:
+            return None
+        line = proc.stdout.readline()
+        return line.decode("utf-8") if line else None
+
+    def ensure_syntax_checker_binary(self) -> bool:
+        if self.syntax_check_bin.exists():
+            return True
+        if self.syntax_check_build_attempted:
+            return False
+
+        self.syntax_check_build_attempted = True
+        if not self.syntax_check_dir.exists():
+            return False
+
+        try:
+            subprocess.run(
+                ["make", "syntax-check"],
+                cwd=str(self.syntax_check_dir),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10.0,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
+        return self.syntax_check_bin.exists()
+
+    def make_diagnostic(self, line_no: int, start: int, end: int, message: str) -> dict:
+        return {
+            "range": {
+                "start": {"line": line_no, "character": start},
+                "end": {"line": line_no, "character": max(end, start + 1)},
+            },
+            "severity": DIAGNOSTIC_SEVERITY_ERROR,
+            "source": "mylang",
+            "message": message,
+        }
 
     def find_matching_close_paren(self, line: str, open_pos: int) -> int:
         depth = 1
