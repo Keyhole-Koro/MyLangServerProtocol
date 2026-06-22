@@ -99,6 +99,18 @@ WIDTH_CASES = [
     ('char s = "hi\\n";\n', ['"hi\\n"']),
 ]
 
+# documentSymbol: (source, {name: SYMBOL_KIND key}, [names that must be absent])
+DOCSYM_CASES = [
+    ("i32 g = 0;\n"
+     "struct Point { i32 fx; };\n"
+     "enum Color { RED };\n"
+     "typedef i32 MyInt;\n"
+     "i32 add(i32 p) { i32 local = foo(p); return local; }\n",
+     {"g": "variable", "Point": "struct", "Color": "enum",
+      "MyInt": "struct", "add": "function"},
+     ["fx", "local", "foo", "p", "RED"]),
+]
+
 ROBUSTNESS_INPUTS = [
     "",
     "\n\n\n",
@@ -161,6 +173,19 @@ def run():
             except Exception as exc:  # noqa: BLE001
                 check(False, f"robustness: crashed on {src!r}: {exc!r}")
 
+        # documentSymbol: outline driven by the parser's symbol output.
+        sym_name = {v: k for k, v in srv.SYMBOL_KIND.items()}
+        for src, expected, absent in DOCSYM_CASES:
+            syms = server.document_symbols(src)
+            got = {}
+            for s in syms:
+                got.setdefault(s["name"], set()).add(sym_name.get(s["kind"]))
+            for name, want in expected.items():
+                check(want in got.get(name, set()),
+                      f"docsym {src!r}: {name!r} -> {got.get(name)!r}, expected {want!r}")
+            for name in absent:
+                check(name not in got, f"docsym: {name!r} must not be an outline symbol")
+
         # graceful degradation: a syntax error mid-document must not wipe out the
         # lexical layer before it (B's accepted tradeoff).
         broken = "i32 add(i32 a){ return; @@@ broken\nPoint p = mk(\n"
@@ -176,6 +201,7 @@ def run():
         return 1
     print(f"[PASS] classification ({len(CLASSIFY_CASES)})")
     print(f"[PASS] lexical mapping seam ({len(LEXICAL_CASES)})")
+    print(f"[PASS] documentSymbol ({len(DOCSYM_CASES)})")
     print(f"[PASS] span fidelity ({len(WIDTH_CASES)})")
     print(f"[PASS] well-formedness + robustness ({len(ROBUSTNESS_INPUTS)} hostile inputs)")
     print("[PASS] cross-component seam")

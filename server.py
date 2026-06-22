@@ -1,6 +1,5 @@
 import json
 import subprocess
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,15 +27,6 @@ TOKEN_MODIFIERS: List[str] = []
 TOKEN_TYPE_INDEX = {name: i for i, name in enumerate(TOKEN_TYPES)}
 
 DIAGNOSTIC_SEVERITY_ERROR = 1
-# Regexes below are used only by documentSymbol (semantic tokens are now driven
-# by the lexer + LR1 parser). documentSymbol can move to the engine's symbol
-# output in a later step.
-KEYWORD_PATTERN = r"(?:if|else|while|do|for|switch|case|default|break|continue|return|yield|of|import|from|export|package|rest)"
-FUNCTION_DEF_RE = re.compile(rf"\b([A-Za-z_][A-Za-z0-9_]*)(?:[ \t]+|\*+[ \t]*)(?!(?:{KEYWORD_PATTERN})\b)([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?=\()")
-STRUCT_NAME_RE = re.compile(r"\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)")
-TYPEDEF_ALIAS_RE = re.compile(r"\btypedef\b[^;{}]*\b([A-Za-z_][A-Za-z0-9_]*)\s*;")
-TYPEDEF_STRUCT_ALIAS_RE = re.compile(r"}\s*([A-Za-z_][A-Za-z0-9_]*)\s*;")
-TYPE_USAGE_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\b(?=\s*(?:\*+\s*)?[A-Za-z_][A-Za-z0-9_]*\s*(?:\[[^\]]*\]\s*)?(?:[=;,)]))")
 
 # Lexical token kind (as emitted by tokenkind2str in the C lexer) -> LSP semantic
 # token type. Note the C aliases: LAND->"AND", LOR->"OR", ARROW->"MEMBER".
@@ -93,6 +83,15 @@ SYMBOL_KIND = {
     "event": 24,
     "operator": 25,
     "typeParameter": 26,
+}
+
+# Engine symbol-kind string -> SYMBOL_KIND key (type aliases shown as struct).
+ENGINE_SYMBOL_KIND = {
+    "function": "function",
+    "struct": "struct",
+    "enum": "enum",
+    "type": "struct",
+    "variable": "variable",
 }
 
 @dataclass
@@ -595,32 +594,20 @@ class LspServer:
         return False
 
     def document_symbols(self, text: str) -> List[dict]:
-        symbols = []
+        # Top-level declarations come from the parser (engine symbol output),
+        # not source-text regexes.
+        result = self.query_syntax_checker(text)
+        if not result:
+            return []
         lines = text.splitlines()
-        for line_no, line in enumerate(lines):
-            m = TYPEDEF_ALIAS_RE.search(line)
-            if m:
-                name = m.group(1)
-                symbols.append(self.make_symbol(name, SYMBOL_KIND["struct"], line_no, m.start(1), m.end(1)))
-            m = TYPEDEF_STRUCT_ALIAS_RE.search(line)
-            if m:
-                name = m.group(1)
-                symbols.append(self.make_symbol(name, SYMBOL_KIND["struct"], line_no, m.start(1), m.end(1)))
-            m = STRUCT_NAME_RE.search(line)
-            if m:
-                name = m.group(1)
-                symbols.append(self.make_symbol(name, SYMBOL_KIND["struct"], line_no, m.start(1), m.end(1)))
-            m = FUNCTION_DEF_RE.search(line)
-            if m:
-                name = m.group(2)
-                symbols.append(self.make_symbol(name, SYMBOL_KIND["function"], line_no, m.start(2), m.end(2)))
+        symbols = []
+        for entry in result.get("symbols", []):
+            line_no, col, length, kind = entry[0], entry[1], entry[2], entry[3]
+            if not (0 <= line_no < len(lines)):
                 continue
-            m = TYPE_USAGE_RE.search(line)
-            if m and "(" not in line:
-                ident_match = re.search(r"(?:\*+\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\])?\s*(?:=|;)", line)
-                if ident_match:
-                    name = ident_match.group(1)
-                    symbols.append(self.make_symbol(name, SYMBOL_KIND["variable"], line_no, ident_match.start(1), ident_match.end(1)))
+            name = lines[line_no][col:col + length]
+            symbol_kind = SYMBOL_KIND[ENGINE_SYMBOL_KIND.get(kind, "variable")]
+            symbols.append(self.make_symbol(name, symbol_kind, line_no, col, col + length))
         return symbols
 
     def make_symbol(self, name: str, kind: int, line_no: int, start: int, end: int) -> dict:
