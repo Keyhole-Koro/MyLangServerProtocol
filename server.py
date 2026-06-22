@@ -111,7 +111,7 @@ class LspServer:
         self.syntax_check_grammar = (
             self.repo_root
             / "toolchain"
-            / "MyLangSyntaxEngine"
+            / "MySyntaxEngine"
             / "tests"
             / "fixtures"
             / "grammars"
