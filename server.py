@@ -33,16 +33,8 @@ KEYWORDS = {
     "export", "package", "typedef", "struct", "const", "static", "extern",
     "auto", "register", "union", "enum", "ref", "mut", "unchecked", "rest",
 }
-OWNERSHIP_REF_WORDS = {"ref"}
-OWNERSHIP_MUT_WORDS = {"mut"}
 BUILTIN_TYPES = {"bool", "i8", "i16", "i32", "u8", "u16", "u32", "char", "float", "double", "void", "long", "short"}
-BOOLS = {"true", "false", "null"}
 DIAGNOSTIC_SEVERITY_ERROR = 1
-TYPE_NAME_RE = re.compile(r"\b[A-Z][A-Za-z0-9_]*\b")
-IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
-NUMBER_RE = re.compile(r"\b(?:0x[0-9A-Fa-f]+|[0-9]+)\b")
-STRING_RE = re.compile(r'"([^"\\]|\\.)*"')
-CHAR_RE = re.compile(r"'([^'\\]|\\.)*'")
 KEYWORD_PATTERN = r"(?:if|else|while|do|for|switch|case|default|break|continue|return|yield|of|import|from|export|package|rest)"
 FUNCTION_DEF_RE = re.compile(rf"\b([A-Za-z_][A-Za-z0-9_]*)(?:[ \t]+|\*+[ \t]*)(?!(?:{KEYWORD_PATTERN})\b)([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?=\()")
 FUNCTION_CALL_RE = re.compile(rf"\b(?!(?:{KEYWORD_PATTERN})\b)([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?=\()")
@@ -51,11 +43,36 @@ STRUCT_NAME_RE = re.compile(r"\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)")
 TYPEDEF_ALIAS_RE = re.compile(r"\btypedef\b[^;{}]*\b([A-Za-z_][A-Za-z0-9_]*)\s*;")
 TYPEDEF_STRUCT_ALIAS_RE = re.compile(r"}\s*([A-Za-z_][A-Za-z0-9_]*)\s*;")
 TYPE_USAGE_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\b(?=\s*(?:\*+\s*)?[A-Za-z_][A-Za-z0-9_]*\s*(?:\[[^\]]*\]\s*)?(?:[=;,)]))")
-PARAM_SPLIT_RE = re.compile(r",")
 PARAM_NAME_RE = re.compile(r"(?:\b[A-Za-z_][A-Za-z0-9_]*\b\s*(?:\*+\s*)?)([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\])?\s*$")
 PROPERTY_RE = re.compile(r"(?:\.|->)\s*([A-Za-z_][A-Za-z0-9_]*)")
-OWNERSHIP_OP_RE = re.compile(r"&mut\b|&(?!&)")
-OPERATOR_RE = re.compile(r"==|!=|<=|>=|&&|\|\||<<|>>|->|\+\+|--|[=+\-*/%<>&|^~?:!]")
+
+# Lexical token kind (as emitted by tokenkind2str in the C lexer) -> LSP semantic
+# token type. Note the C aliases: LAND->"AND", LOR->"OR", ARROW->"MEMBER".
+# Kinds not listed (DOT, HASH, UNDERSCORE, brackets, EOT, UNKNOWN) are left
+# unhighlighted, matching the previous regex behavior.
+KIND_TO_TYPE = {
+    "NUMBER": "number",
+    "STRING_LITERAL": "string", "CHAR_LITERAL": "string",
+    "BOOL": "type", "I32": "type", "U32": "type", "CHAR": "type", "FLOAT": "type",
+    "DOUBLE": "type", "VOID": "type", "LONG": "type", "SHORT": "type",
+    "REF": "ownershipRef", "MUT": "ownershipMut", "AMPERSAND": "ownershipRef",
+    "EQ": "operator", "NEQ": "operator", "LTE": "operator", "GTE": "operator",
+    "AND": "operator", "OR": "operator", "LSH": "operator", "RSH": "operator",
+    "INC": "operator", "DEC": "operator", "ASTARISK": "operator", "MEMBER": "operator",
+    "ADD": "operator", "SUB": "operator", "DIV": "operator", "MOD": "operator",
+    "ASSIGN": "operator", "LT": "operator", "GT": "operator", "NOT": "operator",
+    "QUESTION": "operator", "COLON": "operator", "BITOR": "operator",
+    "BITXOR": "operator", "BITNOT": "operator",
+    "CONST": "keyword", "STATIC": "keyword", "EXTERN": "keyword", "AUTO": "keyword",
+    "REGISTER": "keyword", "SIZEOF": "keyword", "IF": "keyword", "ELSE": "keyword",
+    "WHILE": "keyword", "DO": "keyword", "FOR": "keyword", "SWITCH": "keyword",
+    "CASE": "keyword", "DEFAULT": "keyword", "BREAK": "keyword", "CONTINUE": "keyword",
+    "RETURN": "keyword", "YIELD": "keyword", "UNCHECKED": "keyword", "OF": "keyword",
+    "TYPEDEF": "keyword", "STRUCT": "keyword", "UNION": "keyword", "ENUM": "keyword",
+    "IMPORT": "keyword", "FROM": "keyword", "REST": "keyword", "EXPORT": "keyword",
+    "PACKAGE": "keyword",
+    "IDENTIFIER": "variable",
+}
 
 SYMBOL_KIND = {
     "file": 1,
@@ -481,65 +498,67 @@ class LspServer:
         return parts
 
     def semantic_tokens(self, text: str) -> List[int]:
-        tokens: List[Tuple[int, int, int, str]] = []
         lines = text.splitlines()
         protected = self.protected_spans(lines)
+
+        # Base layer: lexical tokens straight from the C lexer (via the syntax
+        # checker). Replaces the old per-line lexing regexes (strings, numbers,
+        # operators, keywords, builtin types, identifiers).
+        base: Dict[Tuple[int, int], Tuple[int, str]] = {}
+        result = self.query_syntax_checker(text)
+        if result:
+            for entry in result.get("tokens", []):
+                line_no, col, length, kind = entry[0], entry[1], entry[2], entry[3]
+                token_type = KIND_TO_TYPE.get(kind)
+                if not token_type:
+                    continue
+                if 0 <= line_no < len(lines):
+                    # LSP semantic tokens cannot cross a line boundary; clamp.
+                    max_len = max(0, len(lines[line_no]) - col)
+                    if max_len:
+                        length = min(length, max_len)
+                base[(line_no, col)] = (length, token_type)
+
+        # Overlay layer: context-sensitive classification the lexer cannot do
+        # (function vs type vs property vs parameter vs namespace). Overrides the
+        # base IDENTIFIER->variable. The C lexer drops comments, so comments are
+        # still detected here.
+        overlay: Dict[Tuple[int, int], Tuple[int, str]] = {}
         for line_no, line in enumerate(lines):
             for span_start, span_end in protected.get(line_no, []):
                 if span_start >= len(line):
                     continue
-                first = line[span_start]
-                if first == "/" and span_start + 1 < len(line) and line[span_start + 1] in ("/", "*"):
-                    tokens.append((line_no, span_start, span_end - span_start, "comment"))
-                elif first in ('"', "'"):
-                    tokens.append((line_no, span_start, span_end - span_start, "string"))
-            for match in OWNERSHIP_OP_RE.finditer(line):
-                if self.is_protected(line_no, match.start(), match.end(), protected):
-                    continue
-                value = match.group(0)
-                token_type = "ownershipMut" if value.startswith("&mut") else "ownershipRef"
-                tokens.append((line_no, match.start(), len(value), token_type))
-            for match in IDENT_RE.finditer(line):
-                if self.is_protected(line_no, match.start(), match.end(), protected):
-                    continue
-                value = match.group(0)
-                if value in OWNERSHIP_REF_WORDS:
-                    tokens.append((line_no, match.start(), len(value), "ownershipRef"))
-                    continue
-                if value in OWNERSHIP_MUT_WORDS:
-                    tokens.append((line_no, match.start(), len(value), "ownershipMut"))
-                    continue
-                if value in KEYWORDS:
-                    tokens.append((line_no, match.start(), len(value), "keyword"))
+                if line[span_start] == "/" and span_start + 1 < len(line) and line[span_start + 1] in ("/", "*"):
+                    overlay[(line_no, span_start)] = (span_end - span_start, "comment")
             for match in PACKAGE_RE.finditer(line):
                 if self.is_protected(line_no, match.start(), match.end(), protected):
                     continue
                 name = match.group(2)
                 if not name.startswith('"'):
-                    tokens.append((line_no, match.start(2), len(name), "namespace"))
+                    overlay[(line_no, match.start(2))] = (len(name), "namespace")
             for match in TYPEDEF_ALIAS_RE.finditer(line):
                 if self.is_protected(line_no, match.start(), match.end(), protected):
                     continue
                 alias = match.group(1)
-                tokens.append((line_no, match.start(1), len(alias), "type"))
+                overlay[(line_no, match.start(1))] = (len(alias), "type")
             for match in TYPEDEF_STRUCT_ALIAS_RE.finditer(line):
                 if self.is_protected(line_no, match.start(), match.end(), protected):
                     continue
                 alias = match.group(1)
-                tokens.append((line_no, match.start(1), len(alias), "struct"))
+                overlay[(line_no, match.start(1))] = (len(alias), "struct")
             for match in STRUCT_NAME_RE.finditer(line):
                 if self.is_protected(line_no, match.start(), match.end(), protected):
                     continue
                 name = match.group(1)
-                tokens.append((line_no, match.start(1), len(name), "struct"))
+                overlay[(line_no, match.start(1))] = (len(name), "struct")
             for match in FUNCTION_DEF_RE.finditer(line):
                 if self.is_protected(line_no, match.start(), match.end(), protected):
                     continue
                 ret_type, fn_name = match.group(1), match.group(2)
                 kind = "type" if ret_type[0].isupper() else "type" if ret_type in BUILTIN_TYPES else None
                 if kind:
-                    tokens.append((line_no, match.start(1), len(ret_type), kind))
-                tokens.append((line_no, match.start(2), len(fn_name), "function"))
+                    overlay[(line_no, match.start(1))] = (len(ret_type), kind)
+                overlay[(line_no, match.start(2))] = (len(fn_name), "function")
                 open_paren = line.find("(", match.end())
                 close_paren = self.find_matching_close_paren(line, open_paren) if open_paren >= 0 else -1
                 if open_paren >= 0 and close_paren > open_paren:
@@ -555,7 +574,7 @@ class LspServer:
                         if part_start >= 0:
                             name_start = line.find(name, part_start)
                             if name_start >= 0:
-                                tokens.append((line_no, name_start, len(name), "parameter"))
+                                overlay[(line_no, name_start)] = (len(name), "parameter")
                         offset = part_start + len(part) + 1 if part_start >= 0 else offset + len(part) + 1
             for match in TYPE_USAGE_RE.finditer(line):
                 if self.is_protected(line_no, match.start(), match.end(), protected):
@@ -563,52 +582,30 @@ class LspServer:
                 name = match.group(1)
                 token_type = "type" if (name in BUILTIN_TYPES or name[:1].isupper()) else None
                 if token_type:
-                    tokens.append((line_no, match.start(1), len(name), token_type))
+                    overlay[(line_no, match.start(1))] = (len(name), token_type)
             for match in FUNCTION_CALL_RE.finditer(line):
                 if self.is_protected(line_no, match.start(), match.end(), protected):
                     continue
                 name = match.group(1)
                 if name in KEYWORDS:
                     continue
-                tokens.append((line_no, match.start(1), len(name), "function"))
+                overlay[(line_no, match.start(1))] = (len(name), "function")
             for match in PROPERTY_RE.finditer(line):
                 if self.is_protected(line_no, match.start(), match.end(), protected):
                     continue
                 name = match.group(1)
-                tokens.append((line_no, match.start(1), len(name), "property"))
-            for match in NUMBER_RE.finditer(line):
-                if self.is_protected(line_no, match.start(), match.end(), protected):
-                    continue
-                tokens.append((line_no, match.start(), len(match.group(0)), "number"))
-            for match in OPERATOR_RE.finditer(line):
-                if self.is_protected(line_no, match.start(), match.end(), protected):
-                    continue
-                tokens.append((line_no, match.start(), len(match.group(0)), "operator"))
-            for match in IDENT_RE.finditer(line):
-                if self.is_protected(line_no, match.start(), match.end(), protected):
-                    continue
-                value = match.group(0)
-                if value in BOOLS:
-                    tokens.append((line_no, match.start(), len(value), "variable"))
-                elif value in BUILTIN_TYPES:
-                    tokens.append((line_no, match.start(), len(value), "type"))
-                elif value not in KEYWORDS:
-                    tokens.append((line_no, match.start(), len(value), "variable"))
+                overlay[(line_no, match.start(1))] = (len(name), "property")
 
-        tokens.sort(key=lambda t: (t[0], t[1], -t[2]))
-        filtered: List[Tuple[int, int, int, str]] = []
-        occupied = set()
-        for line_no, start, length, token_type in tokens:
-            key = (line_no, start)
-            if key in occupied:
-                continue
-            occupied.add(key)
-            filtered.append((line_no, start, length, token_type))
+        # Overlay wins over base at the same start position.
+        merged = dict(base)
+        merged.update(overlay)
 
         encoded: List[int] = []
         prev_line = 0
         prev_start = 0
-        for line_no, start, length, token_type in filtered:
+        for (line_no, start), (length, token_type) in sorted(merged.items()):
+            if token_type not in TOKEN_TYPE_INDEX:
+                continue
             delta_line = line_no - prev_line
             delta_start = start - prev_start if delta_line == 0 else start
             encoded.extend([delta_line, delta_start, length, TOKEN_TYPE_INDEX[token_type], 0])
