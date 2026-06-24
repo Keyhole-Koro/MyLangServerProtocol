@@ -35,7 +35,7 @@ DIAGNOSTIC_SEVERITY_ERROR = 1
 KIND_TO_TYPE = {
     "NUMBER": "number",
     "STRING_LITERAL": "string", "CHAR_LITERAL": "string",
-    "BOOL": "type", "I32": "type", "U32": "type", "CHAR": "type", "FLOAT": "type",
+    "BOOL": "type", "U8": "type", "U16": "type", "I32": "type", "U32": "type", "CHAR": "type", "FLOAT": "type",
     "DOUBLE": "type", "VOID": "type", "LONG": "type", "SHORT": "type",
     "REF": "ownershipRef", "MUT": "ownershipMut", "AMPERSAND": "ownershipRef",
     "EQ": "operator", "NEQ": "operator", "LTE": "operator", "GTE": "operator",

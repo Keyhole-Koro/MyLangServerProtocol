@@ -72,9 +72,8 @@ CLASSIFY_CASES = [
     ("i32 f(mut i32 a) { return a; }\n", {"a": "parameter", "f": "function"}),
     ("i32 main() { return foo(b) + a.x; }\n",
      {"foo": "function", "x": "property", "main": "function"}),
-    # i8 has no lexer keyword; it must still be a type via the grammar (baseType).
-    ("i8 a = 0; Point p = mk();\n",
-     {"i8": "type", "Point": "type", "mk": "function"}),
+    ("u8 a = 0; u16 b = 1; Point p = mk();\n",
+     {"u8": "type", "u16": "type", "Point": "type", "mk": "function"}),
     # a method-style call stays property (no symbol resolution to call it a method).
     ("i32 m() { return obj.bar(); }\n", {"bar": "property"}),
 ]
@@ -91,6 +90,8 @@ LEXICAL_CASES = [
      {"ref": "ownershipRef", "mut": "ownershipMut"}),
     ("i32 m() { bool t = true; return t; }\n",
      {"bool": "type", "true": "variable"}),  # true/false/null lex as identifiers
+    ("u8 b = 1; u16 w = 2;\n",
+     {"u8": "type", "u16": "type"}),
 ]
 
 # (source, [literal lexemes that must each appear as an exact token slice])
