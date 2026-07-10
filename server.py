@@ -1,6 +1,8 @@
 import json
+import re
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -108,15 +110,10 @@ class LspServer:
         self.repo_root = Path(__file__).resolve().parents[2]
         self.syntax_check_dir = self.repo_root / "toolchain" / "MyLangCompiler"
         self.syntax_check_bin = self.syntax_check_dir / "mylang-syntax-check"
-        self.syntax_check_grammar = (
-            self.repo_root
-            / "toolchain"
-            / "MySyntaxEngine"
-            / "tests"
-            / "fixtures"
-            / "grammars"
-            / "mylang_lsp.grammar"
-        )
+        base_g = self.repo_root / "toolchain" / "MySyntaxEngine" / "tests" / "fixtures" / "grammars" / "mylang_lsp.grammar"
+        mlx_g = self.repo_root / "toolchain" / "MySyntaxEngine" / "tests" / "fixtures" / "grammars" / "mlx.grammar"
+        self.syntax_check_grammar = f"{base_g},{mlx_g}"
+        self.grammar_path_obj = base_g
         self.syntax_check_build_attempted = False
         self.syntax_check_proc: Optional[subprocess.Popen[bytes]] = None
 
@@ -254,7 +251,7 @@ class LspServer:
             if doc is None:
                 self.send_error(id_value, -32602, f"Document not found: {uri}")
                 return
-            self.send_response(id_value, {"data": self.semantic_tokens(doc.text)})
+            self.send_response(id_value, {"data": self.semantic_tokens_for_uri(uri, doc.text)})
             return
         if method == "textDocument/documentSymbol":
             uri = params["textDocument"]["uri"]
@@ -262,7 +259,7 @@ class LspServer:
             if doc is None:
                 self.send_error(id_value, -32602, f"Document not found: {uri}")
                 return
-            self.send_response(id_value, self.document_symbols(doc.text))
+            self.send_response(id_value, self.document_symbols_for_uri(uri, doc.text))
             return
 
         if id_value is not None:
@@ -274,7 +271,7 @@ class LspServer:
             "method": "textDocument/publishDiagnostics",
             "params": {
                 "uri": uri,
-                "diagnostics": self.syntax_diagnostics(text),
+                "diagnostics": self.syntax_diagnostics_for_uri(uri, text),
             },
         })
 
@@ -287,6 +284,9 @@ class LspServer:
                 "diagnostics": [],
             },
         })
+
+    def syntax_diagnostics_for_uri(self, uri: str, text: str) -> List[dict]:
+        return self.syntax_diagnostics(text)
 
     def syntax_diagnostics(self, text: str) -> List[dict]:
         diagnostics = self.bracket_diagnostics(text)
@@ -378,7 +378,7 @@ class LspServer:
     def start_syntax_checker(self) -> bool:
         if self.syntax_check_proc and self.syntax_check_proc.poll() is None:
             return True
-        if not self.ensure_syntax_checker_binary() or not self.syntax_check_grammar.exists():
+        if not self.ensure_syntax_checker_binary() or not self.grammar_path_obj.exists():
             return False
 
         try:
@@ -456,6 +456,9 @@ class LspServer:
             "source": "mylang",
             "message": message,
         }
+
+    def semantic_tokens_for_uri(self, uri: str, text: str) -> List[int]:
+        return self.semantic_tokens(text)
 
     def semantic_tokens(self, text: str) -> List[int]:
         lines = text.splitlines()
@@ -592,6 +595,9 @@ class LspServer:
             if start < span_end and end > span_start:
                 return True
         return False
+
+    def document_symbols_for_uri(self, uri: str, text: str) -> List[dict]:
+        return self.document_symbols(text)
 
     def document_symbols(self, text: str) -> List[dict]:
         # Top-level declarations come from the parser (engine symbol output),

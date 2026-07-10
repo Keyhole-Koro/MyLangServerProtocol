@@ -59,6 +59,20 @@ def roles_in(decoded):
     return out
 
 
+def decode_uri(server, uri, text):
+    enc = server.semantic_tokens_for_uri(uri, text)
+    lines = text.splitlines()
+    out = []
+    line = col = 0
+    for i in range(0, len(enc), 5):
+        dl, dc, length, tidx, _mod = enc[i:i + 5]
+        line += dl
+        col = dc if dl else col + dc
+        slice_ = lines[line][col:col + length] if 0 <= line < len(lines) else None
+        out.append((line, col, length, INV.get(tidx), slice_))
+    return out
+
+
 # (source, {text: expected_type}) — assert each text is classified as expected.
 CLASSIFY_CASES = [
     ("i32 add(i32 a, Point b) { return a + b; }\n",
@@ -193,6 +207,36 @@ def run():
         types = {t for *_x, t, _s in decode(server, broken)}
         check({"type", "operator", "keyword"} <= types,
               f"degradation: broken input lost its lexical layer; types={types!r}")
+
+        # .mlx documents are validated through MyDOMTranspiler and get JSX-like token
+        # highlighting without feeding raw <Window> syntax to the MyLang grammar.
+        mlx_uri = "file:///tmp/screen.mlx"
+        mlx_src = (
+            "package main;\n"
+            "DomNode* screen() {\n"
+            "    return <Window title=\"Settings\" width={320}>\n"
+            "        <Button text=\"OK\" onClick={handle_ok} />\n"
+            "    </Window>;\n"
+            "}\n"
+        )
+        mlx_decoded = decode_uri(server, mlx_uri, mlx_src)
+        mlx_roles = roles_in(mlx_decoded)
+        check("keyword" in mlx_roles.get("return", set()),
+              f"mlx tokens: return roles={mlx_roles.get('return')!r}")
+        check("function" in mlx_roles.get("screen", set()),
+              f"mlx tokens: screen roles={mlx_roles.get('screen')!r}")
+        check("struct" in mlx_roles.get("Window", set()),
+              f"mlx tokens: Window roles={mlx_roles.get('Window')!r}")
+        check("property" in mlx_roles.get("title", set()),
+              f"mlx tokens: title roles={mlx_roles.get('title')!r}")
+        check("number" in mlx_roles.get("320", set()),
+              f"mlx tokens: 320 roles={mlx_roles.get('320')!r}")
+        check(server.syntax_diagnostics_for_uri(mlx_uri, mlx_src) == [],
+              "mlx diagnostics: valid .mlx produced diagnostics")
+        bad_mlx = "DomNode* screen() { return <Window title={} />; }\n"
+        bad_diags = server.syntax_diagnostics_for_uri(mlx_uri, bad_mlx)
+        check(bad_diags and "Expected expression before '}'." in bad_diags[0]["message"],
+              f"mlx diagnostics: invalid .mlx missing syntax diagnostic, got {bad_diags!r}")
     finally:
         server.stop_syntax_checker()
 
@@ -206,6 +250,7 @@ def run():
     print(f"[PASS] span fidelity ({len(WIDTH_CASES)})")
     print(f"[PASS] well-formedness + robustness ({len(ROBUSTNESS_INPUTS)} hostile inputs)")
     print("[PASS] cross-component seam")
+    print("[PASS] native MLX syntax LSP integration")
     return 0
 
 
