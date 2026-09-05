@@ -90,6 +90,17 @@ CLASSIFY_CASES = [
      {"u8": "type", "u16": "type", "Point": "type", "mk": "function"}),
     # a method-style call stays property (no symbol resolution to call it a method).
     ("i32 m() { return obj.bar(); }\n", {"bar": "property"}),
+    (
+        'import { Vec, vec_init } from "generics/vec.mln";\n'
+        'i32 main() { i32 storage[4]; Vec<i32> values; '
+        'vec_init<i32>(&values, &storage[0], 4); return 0; }\n',
+        {"Vec": "type", "vec_init": "function", "i32": "type"},
+    ),
+    (
+        "struct Vec<T> { T *data; };\n"
+        "T first<T>(Vec<T> *values) { return values->data[0]; }\n",
+        {"Vec": "struct", "T": "type", "first": "function"},
+    ),
 ]
 
 # Lexical mapping sweep: representative tokens for the KIND_TO_TYPE seam.
@@ -124,6 +135,12 @@ DOCSYM_CASES = [
      {"g": "variable", "Point": "struct", "Color": "enum",
       "MyInt": "struct", "add": "function"},
      ["fx", "local", "foo", "p", "RED"]),
+    (
+        "struct Vec<T> { T *data; };\n"
+        "T first<T>(Vec<T> *values) { return values->data[0]; }\n",
+        {"Vec": "struct", "first": "function"},
+        ["T", "data", "values"],
+    ),
 ]
 
 ROBUSTNESS_INPUTS = [
@@ -237,6 +254,18 @@ def run():
         bad_diags = server.syntax_diagnostics_for_uri(mlx_uri, bad_mlx)
         check(bad_diags and "Expected expression before '}'." in bad_diags[0]["message"],
               f"mlx diagnostics: invalid .mlx missing syntax diagnostic, got {bad_diags!r}")
+
+        # The split Kernel generic container modules are imported by the same
+        # named-import mechanism editors use. Opening this consumer must not
+        # surface false syntax diagnostics for Vec<T>, Option<T>, and friends.
+        kernel_consumer = (
+            server.repo_root / "toolchain" / "MyLangCompiler" /
+            "tests" / "succeed" / "generic" / "kernel_containers.mln"
+        )
+        if kernel_consumer.exists():
+            kernel_text = kernel_consumer.read_text(encoding="utf-8")
+            check(server.syntax_diagnostics_for_uri(kernel_consumer.as_uri(), kernel_text) == [],
+                  "kernel generic containers: valid named imports produced diagnostics")
     finally:
         server.stop_syntax_checker()
 

@@ -486,6 +486,14 @@ class LspServer:
                 if len(entry) > 4 and entry[4] in TOKEN_TYPE_INDEX:
                     engine[(line_no, col)] = (length, entry[4])
 
+            # The grammar checker deliberately elides recognized generic
+            # argument lists before parsing: that keeps '<' relational unless
+            # the name is a declared or named-imported template.  Restore the
+            # editor-facing meaning of identifier type arguments here.  Builtin
+            # arguments (i32, etc.) are already classified by the lexer.
+            for line_no, col, length in self.generic_type_argument_spans(lines, result.get("tokens", [])):
+                engine[(line_no, col)] = (length, "type")
+
         # Comments: the C lexer discards comments, so they are detected here from
         # the protected spans. (Emitting comment trivia from the lexer is a
         # follow-up; this is the only remaining source-text scan.)
@@ -514,6 +522,71 @@ class LspServer:
             prev_line = line_no
             prev_start = start
         return encoded
+
+    def generic_type_argument_spans(self, lines: List[str], tokens: List[list]) -> List[Tuple[int, int, int]]:
+        """Return identifier spans inside known generic argument/parameter lists.
+
+        The checker has no module resolver, so a named import is a candidate
+        template name.  This is intentionally the same conservative rule it
+        uses when it hides generic spans from the LR grammar; `a < b > c` is
+        never treated as a generic expression unless `a` is such a candidate.
+        """
+        def kind(index: int) -> str:
+            return str(tokens[index][3])
+
+        def lexeme(index: int) -> str:
+            line_no, col, length = (int(tokens[index][0]), int(tokens[index][1]), int(tokens[index][2]))
+            if not (0 <= line_no < len(lines)):
+                return ""
+            return lines[line_no][col:col + length]
+
+        def find_close(open_index: int) -> Optional[int]:
+            depth = 1
+            for index in range(open_index + 1, len(tokens)):
+                token_kind = kind(index)
+                if token_kind == "LT":
+                    depth += 1
+                elif token_kind == "GT":
+                    depth -= 1
+                elif token_kind == "RSH":
+                    depth -= 2
+                if depth <= 0:
+                    return index
+            return None
+
+        candidates = set()
+        for index, token in enumerate(tokens):
+            if kind(index) != "IMPORT" or index + 1 >= len(tokens) or kind(index + 1) != "L_BRACE":
+                continue
+            cursor = index + 2
+            while cursor < len(tokens) and kind(cursor) != "R_BRACE":
+                if kind(cursor) == "IDENTIFIER":
+                    candidates.add(lexeme(cursor))
+                cursor += 1
+
+        # Local struct declarations and every `name<T>(...)` form establish a
+        # template candidate without requiring cross-file resolution.
+        for index in range(len(tokens) - 2):
+            if kind(index) == "STRUCT" and kind(index + 1) == "IDENTIFIER" and kind(index + 2) == "LT":
+                candidates.add(lexeme(index + 1))
+            if kind(index) != "IDENTIFIER" or kind(index + 1) != "LT":
+                continue
+            close = find_close(index + 1)
+            if close is not None and close + 1 < len(tokens) and kind(close + 1) == "L_PARENTHESES":
+                candidates.add(lexeme(index))
+
+        spans: List[Tuple[int, int, int]] = []
+        for index in range(len(tokens) - 1):
+            if kind(index) != "IDENTIFIER" or lexeme(index) not in candidates or kind(index + 1) != "LT":
+                continue
+            close = find_close(index + 1)
+            if close is None:
+                continue
+            for arg_index in range(index + 2, close):
+                if kind(arg_index) == "IDENTIFIER":
+                    line_no, col, length = (int(tokens[arg_index][0]), int(tokens[arg_index][1]), int(tokens[arg_index][2]))
+                    spans.append((line_no, col, length))
+        return spans
 
     def protected_spans(self, lines: List[str]) -> Dict[int, List[Tuple[int, int]]]:
         spans: Dict[int, List[Tuple[int, int]]] = {}
