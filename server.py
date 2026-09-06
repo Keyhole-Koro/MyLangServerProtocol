@@ -113,6 +113,7 @@ class LspServer:
         base_g = self.repo_root / "toolchain" / "MySyntaxEngine" / "tests" / "fixtures" / "grammars" / "mylang_lsp.grammar"
         mlx_g = self.repo_root / "toolchain" / "MySyntaxEngine" / "tests" / "fixtures" / "grammars" / "mlx.grammar"
         self.syntax_check_grammar = f"{base_g},{mlx_g}"
+        self.syntax_check_cache = self.syntax_check_dir / "mylang-syntax-check-lsp.table"
         self.grammar_path_obj = base_g
         self.syntax_check_build_attempted = False
         self.syntax_check_proc: Optional[subprocess.Popen[bytes]] = None
@@ -383,7 +384,12 @@ class LspServer:
 
         try:
             self.syntax_check_proc = subprocess.Popen(
-                [str(self.syntax_check_bin), "--stdio", str(self.syntax_check_grammar)],
+                [
+                    str(self.syntax_check_bin),
+                    "--stdio",
+                    str(self.syntax_check_grammar),
+                    str(self.syntax_check_cache),
+                ],
                 cwd=str(self.syntax_check_dir),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
