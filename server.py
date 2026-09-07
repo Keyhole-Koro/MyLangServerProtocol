@@ -24,6 +24,10 @@ TOKEN_TYPES = [
     "parameter",
     "variable",
     "property",
+    "enum",
+    "enumMember",
+    "result",
+    "resultVariant",
 ]
 TOKEN_MODIFIERS: List[str] = []
 TOKEN_TYPE_INDEX = {name: i for i, name in enumerate(TOKEN_TYPES)}
