@@ -59,6 +59,10 @@ KIND_TO_TYPE = {
     "TYPEDEF": "keyword", "STRUCT": "keyword", "UNION": "keyword", "ENUM": "keyword",
     "IMPORT": "keyword", "FROM": "keyword", "REST": "keyword", "EXPORT": "keyword",
     "PACKAGE": "keyword",
+    # `test` is reserved, but it reads as a namespace wherever it is still a
+    # plain name (`package test;`, `test.pass()`); the grammar's @namespace
+    # annotation retags those. This is the fallback for an unparsable file.
+    "TEST": "keyword",
     "IDENTIFIER": "variable",
 }
 
@@ -94,6 +98,7 @@ SYMBOL_KIND = {
 # Engine symbol-kind string -> SYMBOL_KIND key (type aliases shown as struct).
 ENGINE_SYMBOL_KIND = {
     "function": "function",
+    "method": "method",
     "struct": "struct",
     "enum": "enum",
     "type": "struct",
