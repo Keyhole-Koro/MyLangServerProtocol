@@ -3,10 +3,20 @@ import re
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
+
+from lsp_analysis import (
+    DocumentSnapshot,
+    DocumentStore,
+    FrontendBackend,
+    LanguageFeatures,
+    LineMap,
+    WorkspaceIndex,
+)
 
 TOKEN_TYPES = [
     "comment",
@@ -41,6 +51,7 @@ DIAGNOSTIC_SEVERITY_ERROR = 1
 KIND_TO_TYPE = {
     "NUMBER": "number",
     "STRING_LITERAL": "string", "CHAR_LITERAL": "string",
+    "TRUE_LITERAL": "variable", "FALSE_LITERAL": "variable",
     "BOOL": "type", "U8": "type", "U16": "type", "I32": "type", "U32": "type", "CHAR": "type", "FLOAT": "type",
     "DOUBLE": "type", "VOID": "type", "LONG": "type", "SHORT": "type",
     "REF": "ownershipRef", "MUT": "ownershipMut", "AMPERSAND": "ownershipRef",
@@ -105,16 +116,11 @@ ENGINE_SYMBOL_KIND = {
     "variable": "variable",
 }
 
-@dataclass
-class Document:
-    uri: str
-    text: str
-    version: int
-
-
 class LspServer:
     def __init__(self) -> None:
-        self.docs: Dict[str, Document] = {}
+        self.document_store = DocumentStore()
+        # Compatibility alias for existing tests and small integrations.
+        self.docs = self.document_store.documents
         self.running = True
         self.repo_root = Path(__file__).resolve().parents[2]
         self.syntax_check_dir = self.repo_root / "toolchain" / "MyLangCompiler"
@@ -126,15 +132,29 @@ class LspServer:
         self.grammar_path_obj = base_g
         self.syntax_check_build_attempted = False
         self.syntax_check_proc: Optional[subprocess.Popen[bytes]] = None
+        self.workspace_index = WorkspaceIndex()
+        self.frontend_analysis = FrontendBackend(self.query_syntax_checker)
+        self.language_features = LanguageFeatures(self.frontend_analysis, self.workspace_index)
+        self.indexing_documents: set[str] = set()
+        self.open_documents: set[str] = set()
+        self.send_lock = threading.Lock()
+        self.cancel_lock = threading.Lock()
+        self.cancelled_requests: set[object] = set()
 
     def send(self, payload: dict) -> None:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("ascii"))
-        sys.stdout.buffer.write(body)
-        sys.stdout.buffer.flush()
+        with self.send_lock:
+            sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("ascii"))
+            sys.stdout.buffer.write(body)
+            sys.stdout.buffer.flush()
 
     def send_response(self, id_value, result) -> None:
-        self.send({"jsonrpc": "2.0", "id": id_value, "result": result})
+        with self.cancel_lock:
+            if id_value in self.cancelled_requests:
+                self.cancelled_requests.discard(id_value)
+                self.send_error(id_value, -32800, "Request cancelled")
+                return
+            self.send({"jsonrpc": "2.0", "id": id_value, "result": result})
 
     def send_error(self, id_value, code: int, message: str) -> None:
         self.send({"jsonrpc": "2.0", "id": id_value, "error": {"code": code, "message": message}})
@@ -169,39 +189,50 @@ class LspServer:
             return unquote(parsed.path)
         return None
 
-    def get_doc(self, uri: str) -> Optional[Document]:
-        doc = self.docs.get(uri)
+    def get_doc(self, uri: str) -> Optional[DocumentSnapshot]:
+        doc = self.document_store.get(uri)
         if doc:
             return doc
         path = self.uri_to_path(uri)
         if path:
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    text = f.read()
-                doc = Document(uri=uri, text=text, version=0)
-                self.docs[uri] = doc
-                return doc
-            except OSError:
-                return None
+            return self.document_store.load(uri, path)
         return None
 
     def run(self) -> None:
-        while self.running:
-            try:
-                msg = self.read_message()
-            except Exception:
-                break
-            if msg is None:
-                break
-            try:
-                self.handle(msg)
-            except Exception as e:
-                id_value = msg.get("id") if isinstance(msg, dict) else None
-                if id_value is not None:
-                    try:
-                        self.send_error(id_value, -32603, f"Internal error: {e}")
-                    except Exception:
-                        pass
+        # One worker preserves LSP notification/request ordering and protects the
+        # stateful syntax-check subprocess. The reader remains free to accept a
+        # cancellation notification while analysis is in progress.
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="mylang-analysis") as executor:
+            while self.running:
+                try:
+                    msg = self.read_message()
+                except Exception:
+                    break
+                if msg is None:
+                    break
+                if msg.get("method") == "$/cancelRequest":
+                    request_id = msg.get("params", {}).get("id")
+                    with self.cancel_lock:
+                        self.cancelled_requests.add(request_id)
+                    continue
+                executor.submit(self.handle_queued, msg)
+
+    def handle_queued(self, msg: dict) -> None:
+        id_value = msg.get("id") if isinstance(msg, dict) else None
+        if id_value is not None:
+            with self.cancel_lock:
+                if id_value in self.cancelled_requests:
+                    self.cancelled_requests.discard(id_value)
+                    self.send_error(id_value, -32800, "Request cancelled")
+                    return
+        try:
+            self.handle(msg)
+        except Exception as error:
+            if id_value is not None:
+                try:
+                    self.send_error(id_value, -32603, f"Internal error: {error}")
+                except Exception:
+                    pass
 
     def handle(self, msg: dict) -> None:
         method = msg.get("method")
@@ -209,18 +240,27 @@ class LspServer:
         params = msg.get("params", {})
 
         if method == "initialize":
-            result = {
-                "capabilities": {
-                    "textDocumentSync": 1,
-                    "semanticTokensProvider": {
-                        "legend": {
-                            "tokenTypes": TOKEN_TYPES,
-                            "tokenModifiers": TOKEN_MODIFIERS,
-                        },
-                        "full": True,
-                    },
-                    "documentSymbolProvider": True,
+            capabilities = {
+                "textDocumentSync": 1,
+                "positionEncoding": "utf-16",
+                "hoverProvider": True,
+                "signatureHelpProvider": {
+                    "triggerCharacters": ["(", ","],
+                    "retriggerCharacters": [","],
                 },
+                "documentSymbolProvider": True,
+            }
+            init_options = params.get("initializationOptions") or {}
+            if init_options.get("semanticTokens", True):
+                capabilities["semanticTokensProvider"] = {
+                    "legend": {
+                        "tokenTypes": TOKEN_TYPES,
+                        "tokenModifiers": TOKEN_MODIFIERS,
+                    },
+                    "full": True,
+                }
+            result = {
+                "capabilities": capabilities,
                 "serverInfo": {
                     "name": "mylang-lsp",
                     "version": "0.1.0",
@@ -229,6 +269,19 @@ class LspServer:
             self.send_response(id_value, result)
             return
         if method == "initialized":
+            return
+        if method in ("$/cancelRequest", "$/setTrace", "workspace/didChangeConfiguration"):
+            return
+        if method == "workspace/didChangeWatchedFiles":
+            for change in params.get("changes", []):
+                changed_uri = change.get("uri")
+                if not changed_uri or changed_uri in self.open_documents:
+                    continue
+                self.document_store.close(changed_uri)
+                self.frontend_analysis.invalidate(changed_uri)
+                self.workspace_index.remove(changed_uri)
+            for open_uri in list(self.open_documents):
+                self.index_document(open_uri)
             return
         if method == "shutdown":
             self.send_response(id_value, None)
@@ -239,20 +292,30 @@ class LspServer:
             return
         if method == "textDocument/didOpen":
             td = params["textDocument"]
-            self.docs[td["uri"]] = Document(td["uri"], td.get("text", ""), td.get("version", 0))
+            self.open_documents.add(td["uri"])
+            self.document_store.update(td["uri"], td.get("text", ""), td.get("version", 0))
+            self.frontend_analysis.invalidate(td["uri"])
+            self.workspace_index.remove(td["uri"])
             self.publish_diagnostics(td["uri"], td.get("text", ""))
+            self.index_document(td["uri"])
             return
         if method == "textDocument/didChange":
             td = params["textDocument"]
             changes = params.get("contentChanges", [])
             if changes:
                 text = changes[-1].get("text", "")
-                self.docs[td["uri"]] = Document(td["uri"], text, td.get("version", 0))
+                self.document_store.update(td["uri"], text, td.get("version", 0))
+                self.frontend_analysis.invalidate(td["uri"])
+                self.workspace_index.remove(td["uri"])
                 self.publish_diagnostics(td["uri"], text)
+                self.index_document(td["uri"])
             return
         if method == "textDocument/didClose":
             td = params["textDocument"]
-            self.docs.pop(td["uri"], None)
+            self.open_documents.discard(td["uri"])
+            self.document_store.close(td["uri"])
+            self.frontend_analysis.invalidate(td["uri"])
+            self.workspace_index.remove(td["uri"])
             self.clear_diagnostics(td["uri"])
             return
         if method == "textDocument/semanticTokens/full":
@@ -271,6 +334,27 @@ class LspServer:
                 return
             self.send_response(id_value, self.document_symbols_for_uri(uri, doc.text))
             return
+        if method == "textDocument/hover":
+            uri = params["textDocument"]["uri"]
+            doc = self.get_doc(uri)
+            if doc is None:
+                self.send_response(id_value, None)
+                return
+            self.index_document(uri)
+            self.send_response(id_value, self.language_features.hover(doc, params.get("position", {})))
+            return
+        if method == "textDocument/signatureHelp":
+            uri = params["textDocument"]["uri"]
+            doc = self.get_doc(uri)
+            if doc is None:
+                self.send_response(id_value, None)
+                return
+            self.index_document(uri)
+            self.send_response(
+                id_value,
+                self.language_features.signature_help(doc, params.get("position", {})),
+            )
+            return
 
         if id_value is not None:
             self.send_error(id_value, -32601, f"Method not found: {method}")
@@ -284,6 +368,36 @@ class LspServer:
                 "diagnostics": self.syntax_diagnostics_for_uri(uri, text),
             },
         })
+
+    def index_document(self, uri: str) -> None:
+        if uri in self.indexing_documents:
+            return
+        doc = self.document_store.get(uri)
+        if doc is None:
+            return
+        self.indexing_documents.add(uri)
+        try:
+            unit = self.language_features.unit(doc)
+            importer_path = self.uri_to_path(uri)
+            if not importer_path:
+                return
+            importer_dir = Path(importer_path).parent
+            for import_name, relative_path in unit.import_sources.items():
+                if not relative_path.endswith(".mln"):
+                    continue
+                try:
+                    target_path = (importer_dir / relative_path).resolve(strict=True)
+                except OSError:
+                    continue
+                target_uri = target_path.as_uri()
+                unit.import_targets[import_name] = target_uri
+                target_doc = self.document_store.get(target_uri)
+                if target_doc is None:
+                    target_doc = self.document_store.load(target_uri, str(target_path))
+                if target_doc is not None:
+                    self.index_document(target_uri)
+        finally:
+            self.indexing_documents.remove(uri)
 
     def clear_diagnostics(self, uri: str) -> None:
         self.send({
@@ -327,16 +441,17 @@ class LspServer:
                     continue
                 diagnostics.append(self.make_diagnostic(
                     line_no,
-                    char_no,
-                    char_no + 1,
+                    self.utf16_column(line, char_no),
+                    self.utf16_column(line, char_no + 1),
                     f"Unexpected '{ch}'.",
                 ))
 
         for opener, line_no, char_no in stack:
+            line = lines[line_no]
             diagnostics.append(self.make_diagnostic(
                 line_no,
-                char_no,
-                char_no + 1,
+                self.utf16_column(line, char_no),
+                self.utf16_column(line, char_no + 1),
                 f"Expected '{pairs[opener]}' before end of file.",
             ))
 
@@ -350,11 +465,17 @@ class LspServer:
             return []
 
         diagnostics = []
+        line_map = LineMap(text)
         for diagnostic in result.get("diagnostics", []):
+            line_no = int(diagnostic.get("line", 0))
+            start_byte = int(diagnostic.get("character", 0))
+            end_byte = int(diagnostic.get("endCharacter", start_byte + 1))
+            start = line_map.offset_to_lsp(line_map.native_offset(line_no, start_byte))["character"]
+            end = line_map.offset_to_lsp(line_map.native_offset(line_no, end_byte))["character"]
             diagnostics.append(self.make_diagnostic(
-                int(diagnostic.get("line", 0)),
-                int(diagnostic.get("character", 0)),
-                int(diagnostic.get("endCharacter", int(diagnostic.get("character", 0)) + 1)),
+                line_no,
+                start,
+                end,
                 str(diagnostic.get("message", "Syntax error.")),
             ))
         return diagnostics
@@ -472,11 +593,15 @@ class LspServer:
             "message": message,
         }
 
+    def utf16_column(self, line: str, codepoint_column: int) -> int:
+        return len(line[:codepoint_column].encode("utf-16-le")) // 2
+
     def semantic_tokens_for_uri(self, uri: str, text: str) -> List[int]:
         return self.semantic_tokens(text)
 
     def semantic_tokens(self, text: str) -> List[int]:
         lines = text.splitlines()
+        line_map = LineMap(text)
         protected = self.protected_spans(lines)
 
         # Base layer: lexical tokens straight from the C lexer (strings, numbers,
@@ -491,14 +616,14 @@ class LspServer:
             for entry in result.get("tokens", []):
                 line_no, col, length, kind = entry[0], entry[1], entry[2], entry[3]
                 if 0 <= line_no < len(lines):
-                    # LSP semantic tokens cannot cross a line boundary; clamp.
-                    max_len = max(0, len(lines[line_no]) - col)
-                    if max_len:
-                        length = min(length, max_len)
+                    start_pos = line_map.offset_to_lsp(line_map.native_offset(line_no, col))
+                    end_pos = line_map.offset_to_lsp(line_map.native_offset(line_no, col + length))
+                    col = start_pos["character"]
+                    length = max(0, end_pos["character"] - col)
                 token_type = KIND_TO_TYPE.get(kind)
-                if token_type:
+                if token_type and length:
                     base[(line_no, col)] = (length, token_type)
-                if len(entry) > 4 and entry[4] in TOKEN_TYPE_INDEX:
+                if length and len(entry) > 4 and entry[4] in TOKEN_TYPE_INDEX:
                     engine[(line_no, col)] = (length, entry[4])
 
             # The grammar checker deliberately elides recognized generic
@@ -507,7 +632,12 @@ class LspServer:
             # editor-facing meaning of identifier type arguments here.  Builtin
             # arguments (i32, etc.) are already classified by the lexer.
             for line_no, col, length in self.generic_type_argument_spans(lines, result.get("tokens", [])):
-                engine[(line_no, col)] = (length, "type")
+                start_pos = line_map.offset_to_lsp(line_map.native_offset(line_no, col))
+                end_pos = line_map.offset_to_lsp(line_map.native_offset(line_no, col + length))
+                utf16_col = start_pos["character"]
+                utf16_length = max(0, end_pos["character"] - utf16_col)
+                if utf16_length:
+                    engine[(line_no, utf16_col)] = (utf16_length, "type")
 
         # Comments: the C lexer discards comments, so they are detected here from
         # the protected spans. (Emitting comment trivia from the lexer is a
@@ -518,7 +648,9 @@ class LspServer:
                 if span_start >= len(line):
                     continue
                 if line[span_start] == "/" and span_start + 1 < len(line) and line[span_start + 1] in ("/", "*"):
-                    comments[(line_no, span_start)] = (span_end - span_start, "comment")
+                    utf16_start = self.utf16_column(line, span_start)
+                    utf16_end = self.utf16_column(line, span_end)
+                    comments[(line_no, utf16_start)] = (utf16_end - utf16_start, "comment")
 
         # Priority: base (lexical) < engine (grammar-derived) < comments.
         merged = dict(base)
@@ -553,7 +685,8 @@ class LspServer:
             line_no, col, length = (int(tokens[index][0]), int(tokens[index][1]), int(tokens[index][2]))
             if not (0 <= line_no < len(lines)):
                 return ""
-            return lines[line_no][col:col + length]
+            data = lines[line_no].encode("utf-8")
+            return data[col:col + length].decode("utf-8", errors="replace")
 
         def find_close(open_index: int) -> Optional[int]:
             depth = 1
@@ -694,14 +827,19 @@ class LspServer:
         if not result:
             return []
         lines = text.splitlines()
+        line_map = LineMap(text)
         symbols = []
         for entry in result.get("symbols", []):
             line_no, col, length, kind = entry[0], entry[1], entry[2], entry[3]
             if not (0 <= line_no < len(lines)):
                 continue
-            name = lines[line_no][col:col + length]
+            start_offset = line_map.native_offset(line_no, col)
+            end_offset = line_map.native_offset(line_no, col + length)
+            name = line_map.data[start_offset:end_offset].decode("utf-8", errors="replace")
+            start = line_map.offset_to_lsp(start_offset)["character"]
+            end = line_map.offset_to_lsp(end_offset)["character"]
             symbol_kind = SYMBOL_KIND[ENGINE_SYMBOL_KIND.get(kind, "variable")]
-            symbols.append(self.make_symbol(name, symbol_kind, line_no, col, col + length))
+            symbols.append(self.make_symbol(name, symbol_kind, line_no, start, end))
         return symbols
 
     def make_symbol(self, name: str, kind: int, line_no: int, start: int, end: int) -> dict:

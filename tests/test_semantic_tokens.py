@@ -80,7 +80,7 @@ CLASSIFY_CASES = [
     ("package gfx;\n", {"gfx": "namespace"}),
     ('import math from "m";\n', {"math": "namespace"}),
     ("struct Point { i32 x; };\n", {"Point": "struct"}),
-    ("enum Color { RED, GREEN };\n", {"Color": "struct"}),
+    ("enum Color { RED, GREEN };\n", {"Color": "enum"}),
     ("typedef struct { i32 x; } Vec;\n", {"Vec": "struct"}),
     ("extern i32 puts(i32 c);\n", {"puts": "function", "c": "parameter"}),
     ("i32 f(mut i32 a) { return a; }\n", {"a": "parameter", "f": "function"}),
@@ -114,7 +114,7 @@ LEXICAL_CASES = [
     ("ref i32 g(mut i32 a) { return a; }\n",
      {"ref": "ownershipRef", "mut": "ownershipMut"}),
     ("i32 m() { bool t = true; return t; }\n",
-     {"bool": "type", "true": "variable"}),  # true/false/null lex as identifiers
+     {"bool": "type", "true": "variable"}),
     ("u8 b = 1; u16 w = 2;\n",
      {"u8": "type", "u16": "type"}),
 ]
