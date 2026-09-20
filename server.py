@@ -1,11 +1,13 @@
+import hashlib
 import json
 import re
 import subprocess
 import sys
 import tempfile
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from collections import OrderedDict
 from pathlib import Path
+from queue import PriorityQueue
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
 
@@ -20,6 +22,7 @@ from lsp_analysis import (
 
 TOKEN_TYPES = [
     "comment",
+    "docTag",
     "string",
     "keyword",
     "operator",
@@ -132,11 +135,18 @@ class LspServer:
         self.grammar_path_obj = base_g
         self.syntax_check_build_attempted = False
         self.syntax_check_proc: Optional[subprocess.Popen[bytes]] = None
+        # Diagnostics, editor features, and semantic highlighting all consume
+        # the same frontend response. Keep a small content-addressed cache so
+        # opening a document does not parse identical text several times.
+        self.syntax_result_cache: OrderedDict[bytes, dict] = OrderedDict()
+        self.syntax_result_cache_limit = 16
         self.workspace_index = WorkspaceIndex()
         self.frontend_analysis = FrontendBackend(self.query_syntax_checker)
         self.language_features = LanguageFeatures(self.frontend_analysis, self.workspace_index)
         self.indexing_documents: set[str] = set()
         self.open_documents: set[str] = set()
+        self.semantic_tokens_enabled = True
+        self.pending_diagnostics: Dict[str, int] = {}
         self.send_lock = threading.Lock()
         self.cancel_lock = threading.Lock()
         self.cancelled_requests: set[object] = set()
@@ -150,11 +160,13 @@ class LspServer:
 
     def send_response(self, id_value, result) -> None:
         with self.cancel_lock:
-            if id_value in self.cancelled_requests:
+            cancelled = id_value in self.cancelled_requests
+            if cancelled:
                 self.cancelled_requests.discard(id_value)
-                self.send_error(id_value, -32800, "Request cancelled")
-                return
-            self.send({"jsonrpc": "2.0", "id": id_value, "result": result})
+        if cancelled:
+            self.send_error(id_value, -32800, "Request cancelled")
+            return
+        self.send({"jsonrpc": "2.0", "id": id_value, "result": result})
 
     def send_error(self, id_value, code: int, message: str) -> None:
         self.send({"jsonrpc": "2.0", "id": id_value, "error": {"code": code, "message": message}})
@@ -199,10 +211,27 @@ class LspServer:
         return None
 
     def run(self) -> None:
-        # One worker preserves LSP notification/request ordering and protects the
-        # stateful syntax-check subprocess. The reader remains free to accept a
-        # cancellation notification while analysis is in progress.
-        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="mylang-analysis") as executor:
+        # One worker protects the stateful syntax-check subprocess. Tasks from
+        # the same document generation are priority ordered so Hover and
+        # Signature Help can pass background symbol work, while document
+        # updates from different generations retain protocol ordering.
+        tasks: PriorityQueue[tuple[int, int, int, Optional[dict]]] = PriorityQueue()
+
+        def work() -> None:
+            while True:
+                _generation, _priority, _sequence, message = tasks.get()
+                try:
+                    if message is None:
+                        return
+                    self.handle_queued(message)
+                finally:
+                    tasks.task_done()
+
+        worker = threading.Thread(target=work, name="mylang-analysis", daemon=True)
+        worker.start()
+        generation = 0
+        sequence = 0
+        try:
             while self.running:
                 try:
                     msg = self.read_message()
@@ -215,16 +244,53 @@ class LspServer:
                     with self.cancel_lock:
                         self.cancelled_requests.add(request_id)
                     continue
-                executor.submit(self.handle_queued, msg)
+                method = msg.get("method")
+                if method in {
+                    "textDocument/didOpen",
+                    "textDocument/didChange",
+                    "textDocument/didClose",
+                    "workspace/didChangeWatchedFiles",
+                }:
+                    generation += 1
+                tasks.put((generation, self.message_priority(method), sequence, msg))
+                sequence += 1
+        finally:
+            tasks.put((generation + 1, 100, sequence, None))
+            worker.join()
+
+    def message_priority(self, method: Optional[str]) -> int:
+        """Lower values run first within one document generation."""
+        if method in {
+            "initialize",
+            "initialized",
+            "shutdown",
+            "exit",
+            "textDocument/didOpen",
+            "textDocument/didChange",
+            "textDocument/didClose",
+        }:
+            return 0
+        if method in {
+            "textDocument/hover",
+            "textDocument/definition",
+            "textDocument/signatureHelp",
+            "textDocument/semanticTokens/full",
+        }:
+            return 1
+        if method == "textDocument/documentSymbol":
+            return 5
+        return 3
 
     def handle_queued(self, msg: dict) -> None:
         id_value = msg.get("id") if isinstance(msg, dict) else None
         if id_value is not None:
             with self.cancel_lock:
-                if id_value in self.cancelled_requests:
+                cancelled = id_value in self.cancelled_requests
+                if cancelled:
                     self.cancelled_requests.discard(id_value)
-                    self.send_error(id_value, -32800, "Request cancelled")
-                    return
+            if cancelled:
+                self.send_error(id_value, -32800, "Request cancelled")
+                return
         try:
             self.handle(msg)
         except Exception as error:
@@ -244,6 +310,7 @@ class LspServer:
                 "textDocumentSync": 1,
                 "positionEncoding": "utf-16",
                 "hoverProvider": True,
+                "definitionProvider": True,
                 "signatureHelpProvider": {
                     "triggerCharacters": ["(", ","],
                     "retriggerCharacters": [","],
@@ -251,7 +318,8 @@ class LspServer:
                 "documentSymbolProvider": True,
             }
             init_options = params.get("initializationOptions") or {}
-            if init_options.get("semanticTokens", True):
+            self.semantic_tokens_enabled = init_options.get("semanticTokens", True)
+            if self.semantic_tokens_enabled:
                 capabilities["semanticTokensProvider"] = {
                     "legend": {
                         "tokenTypes": TOKEN_TYPES,
@@ -280,8 +348,6 @@ class LspServer:
                 self.document_store.close(changed_uri)
                 self.frontend_analysis.invalidate(changed_uri)
                 self.workspace_index.remove(changed_uri)
-            for open_uri in list(self.open_documents):
-                self.index_document(open_uri)
             return
         if method == "shutdown":
             self.send_response(id_value, None)
@@ -296,8 +362,10 @@ class LspServer:
             self.document_store.update(td["uri"], td.get("text", ""), td.get("version", 0))
             self.frontend_analysis.invalidate(td["uri"])
             self.workspace_index.remove(td["uri"])
-            self.publish_diagnostics(td["uri"], td.get("text", ""))
-            self.index_document(td["uri"])
+            if self.semantic_tokens_enabled:
+                self.pending_diagnostics[td["uri"]] = td.get("version", 0)
+            else:
+                self.publish_diagnostics(td["uri"], td.get("text", ""))
             return
         if method == "textDocument/didChange":
             td = params["textDocument"]
@@ -307,8 +375,10 @@ class LspServer:
                 self.document_store.update(td["uri"], text, td.get("version", 0))
                 self.frontend_analysis.invalidate(td["uri"])
                 self.workspace_index.remove(td["uri"])
-                self.publish_diagnostics(td["uri"], text)
-                self.index_document(td["uri"])
+                if self.semantic_tokens_enabled:
+                    self.pending_diagnostics[td["uri"]] = td.get("version", 0)
+                else:
+                    self.publish_diagnostics(td["uri"], text)
             return
         if method == "textDocument/didClose":
             td = params["textDocument"]
@@ -316,6 +386,7 @@ class LspServer:
             self.document_store.close(td["uri"])
             self.frontend_analysis.invalidate(td["uri"])
             self.workspace_index.remove(td["uri"])
+            self.pending_diagnostics.pop(td["uri"], None)
             self.clear_diagnostics(td["uri"])
             return
         if method == "textDocument/semanticTokens/full":
@@ -324,7 +395,13 @@ class LspServer:
             if doc is None:
                 self.send_error(id_value, -32602, f"Document not found: {uri}")
                 return
-            self.send_response(id_value, {"data": self.semantic_tokens_for_uri(uri, doc.text)})
+            tokens = self.semantic_tokens_for_uri(uri, doc.text)
+            # Flush highlighting before doing any follow-up analysis. The
+            # frontend result is cached, so diagnostics can reuse it without a
+            # second native parse. Documentation remains lazy until hover or
+            # signature help is actually requested.
+            self.send_response(id_value, {"data": tokens})
+            self.publish_pending_diagnostics(uri, doc)
             return
         if method == "textDocument/documentSymbol":
             uri = params["textDocument"]["uri"]
@@ -334,14 +411,46 @@ class LspServer:
                 return
             self.send_response(id_value, self.document_symbols_for_uri(uri, doc.text))
             return
-        if method == "textDocument/hover":
+        if method == "textDocument/definition":
             uri = params["textDocument"]["uri"]
             doc = self.get_doc(uri)
             if doc is None:
                 self.send_response(id_value, None)
                 return
             self.index_document(uri)
-            self.send_response(id_value, self.language_features.hover(doc, params.get("position", {})))
+            position = params.get("position", {})
+            result = self.language_features.definition(doc, position)
+            if result is None:
+                target_uri = self.language_features.definition_import_target_at(doc, position)
+                if target_uri is not None and self.workspace_index.get(target_uri) is None:
+                    self.index_import(target_uri)
+                    result = self.language_features.definition(doc, position)
+            self.send_response(id_value, result)
+            return
+        if method == "textDocument/hover":
+            uri = params["textDocument"]["uri"]
+            doc = self.get_doc(uri)
+            if doc is None:
+                self.send_response(id_value, None)
+                return
+            position = params.get("position", {})
+            if self.workspace_index.get(uri) is None:
+                self.send_response(id_value, self.loading_hover())
+                self.prepare_hover(doc, position)
+                self.notify_hover_ready(doc, position)
+                return
+
+            result = self.language_features.hover(doc, position)
+            if result is None:
+                # Resolve only the import selected by the pointer. Unrelated
+                # direct and transitive imports stay cold.
+                target_uri = self.language_features.import_target_at(doc, position)
+                if target_uri is not None and self.workspace_index.get(target_uri) is None:
+                    self.send_response(id_value, self.loading_hover())
+                    self.index_import(target_uri)
+                    self.notify_hover_ready(doc, position)
+                    return
+            self.send_response(id_value, result)
             return
         if method == "textDocument/signatureHelp":
             uri = params["textDocument"]["uri"]
@@ -350,9 +459,16 @@ class LspServer:
                 self.send_response(id_value, None)
                 return
             self.index_document(uri)
+            position = params.get("position", {})
+            result = self.language_features.signature_help(doc, position)
+            if result is None:
+                target_uri = self.language_features.import_target_at(doc, position)
+                if target_uri is not None:
+                    self.index_import(target_uri)
+                    result = self.language_features.signature_help(doc, position)
             self.send_response(
                 id_value,
-                self.language_features.signature_help(doc, params.get("position", {})),
+                result,
             )
             return
 
@@ -368,6 +484,13 @@ class LspServer:
                 "diagnostics": self.syntax_diagnostics_for_uri(uri, text),
             },
         })
+
+    def publish_pending_diagnostics(self, uri: str, doc: DocumentSnapshot) -> None:
+        version = self.pending_diagnostics.get(uri)
+        if version != doc.version:
+            return
+        self.pending_diagnostics.pop(uri, None)
+        self.publish_diagnostics(uri, doc.text)
 
     def index_document(self, uri: str) -> None:
         if uri in self.indexing_documents:
@@ -391,13 +514,44 @@ class LspServer:
                     continue
                 target_uri = target_path.as_uri()
                 unit.import_targets[import_name] = target_uri
-                target_doc = self.document_store.get(target_uri)
-                if target_doc is None:
-                    target_doc = self.document_store.load(target_uri, str(target_path))
-                if target_doc is not None:
-                    self.index_document(target_uri)
         finally:
             self.indexing_documents.remove(uri)
+
+    def index_import(self, target_uri: str) -> None:
+        """Index exactly one source import selected by an interactive request."""
+        target_doc = self.document_store.get(target_uri)
+        if target_doc is None:
+            target_path = self.uri_to_path(target_uri)
+            if target_path:
+                target_doc = self.document_store.load(target_uri, target_path)
+        if target_doc is not None:
+            self.index_document(target_uri)
+
+    def prepare_hover(self, doc: DocumentSnapshot, position: dict) -> None:
+        """Populate just enough index state for a subsequent hover request."""
+        self.index_document(doc.uri)
+        target_uri = self.language_features.import_target_at(doc, position)
+        if target_uri is not None and self.workspace_index.get(target_uri) is None:
+            self.index_import(target_uri)
+
+    def loading_hover(self) -> dict:
+        return {
+            "contents": {
+                "kind": "markdown",
+                "value": "Loading...",
+            }
+        }
+
+    def notify_hover_ready(self, doc: DocumentSnapshot, position: dict) -> None:
+        self.send({
+            "jsonrpc": "2.0",
+            "method": "mylang/hoverReady",
+            "params": {
+                "uri": doc.uri,
+                "version": doc.version,
+                "position": position,
+            },
+        })
 
     def clear_diagnostics(self, uri: str) -> None:
         self.send({
@@ -481,13 +635,18 @@ class LspServer:
         return diagnostics
 
     def query_syntax_checker(self, text: str) -> Optional[dict]:
+        data = text.encode("utf-8")
+        cache_key = hashlib.sha256(data).digest()
+        cached = self.syntax_result_cache.get(cache_key)
+        if cached is not None:
+            self.syntax_result_cache.move_to_end(cache_key)
+            return cached
         if not self.start_syntax_checker():
             return None
         if not self.syntax_check_proc or not self.syntax_check_proc.stdin:
             return None
 
         try:
-            data = text.encode("utf-8")
             self.syntax_check_proc.stdin.write(f"content {len(data)}\n".encode("ascii"))
             self.syntax_check_proc.stdin.write(data)
             self.syntax_check_proc.stdin.write(b"\n")
@@ -501,7 +660,12 @@ class LspServer:
             if line is None:
                 self.stop_syntax_checker()
                 return None
-            return json.loads(line)
+            result = json.loads(line)
+            self.syntax_result_cache[cache_key] = result
+            self.syntax_result_cache.move_to_end(cache_key)
+            while len(self.syntax_result_cache) > self.syntax_result_cache_limit:
+                self.syntax_result_cache.popitem(last=False)
+            return result
         except (json.JSONDecodeError, OSError):
             self.stop_syntax_checker()
             return None
@@ -642,15 +806,7 @@ class LspServer:
         # Comments: the C lexer discards comments, so they are detected here from
         # the protected spans. (Emitting comment trivia from the lexer is a
         # follow-up; this is the only remaining source-text scan.)
-        comments: Dict[Tuple[int, int], Tuple[int, str]] = {}
-        for line_no, line in enumerate(lines):
-            for span_start, span_end in protected.get(line_no, []):
-                if span_start >= len(line):
-                    continue
-                if line[span_start] == "/" and span_start + 1 < len(line) and line[span_start + 1] in ("/", "*"):
-                    utf16_start = self.utf16_column(line, span_start)
-                    utf16_end = self.utf16_column(line, span_end)
-                    comments[(line_no, utf16_start)] = (utf16_end - utf16_start, "comment")
+        comments = self.comment_semantic_tokens(lines, protected)
 
         # Priority: base (lexical) < engine (grammar-derived) < comments.
         merged = dict(base)
@@ -669,6 +825,60 @@ class LspServer:
             prev_line = line_no
             prev_start = start
         return encoded
+
+    def comment_semantic_tokens(
+        self,
+        lines: List[str],
+        protected: Dict[int, List[Tuple[int, int]]],
+    ) -> Dict[Tuple[int, int], Tuple[int, str]]:
+        tokens: Dict[Tuple[int, int], Tuple[int, str]] = {}
+        in_block_comment = False
+        block_is_doc = False
+
+        def add(line_no: int, line: str, start: int, end: int, token_type: str) -> None:
+            if end <= start:
+                return
+            utf16_start = self.utf16_column(line, start)
+            utf16_end = self.utf16_column(line, end)
+            if utf16_end > utf16_start:
+                tokens[(line_no, utf16_start)] = (utf16_end - utf16_start, token_type)
+
+        for line_no, line in enumerate(lines):
+            for span_start, span_end in protected.get(line_no, []):
+                if span_start >= len(line):
+                    continue
+                segment = line[span_start:span_end]
+                is_comment = False
+                is_doc = False
+                if in_block_comment:
+                    is_comment = True
+                    is_doc = block_is_doc
+                    if "*/" in segment:
+                        in_block_comment = False
+                        block_is_doc = False
+                elif segment.startswith("//"):
+                    is_comment = True
+                    is_doc = segment.startswith("///")
+                elif segment.startswith("/*"):
+                    is_comment = True
+                    is_doc = segment.startswith("/**")
+                    if "*/" not in segment:
+                        in_block_comment = True
+                        block_is_doc = is_doc
+                if not is_comment:
+                    continue
+
+                cursor = span_start
+                if is_doc:
+                    for match in re.finditer(r"@[A-Za-z_][A-Za-z0-9_]*", segment):
+                        tag_start = span_start + match.start()
+                        tag_end = span_start + match.end()
+                        add(line_no, line, cursor, tag_start, "comment")
+                        add(line_no, line, tag_start, tag_end, "docTag")
+                        cursor = tag_end
+                add(line_no, line, cursor, span_end, "comment")
+
+        return tokens
 
     def generic_type_argument_spans(self, lines: List[str], tokens: List[list]) -> List[Tuple[int, int, int]]:
         """Return identifier spans inside known generic argument/parameter lists.

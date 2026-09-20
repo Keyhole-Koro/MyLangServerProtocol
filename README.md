@@ -7,6 +7,7 @@ A lightweight Language Server Protocol implementation for MyLang.
 - semantic tokens
 - document symbols
 - `/** ... */`, `///`, `@param`, and `@return` function documentation
+- vermilion `docTag` semantic highlighting for documentation annotations
 - Hover for function declarations, resolved calls, and call arguments
 - Signature Help with nested-call-aware active parameter selection
 - local and relative-import function documentation lookup

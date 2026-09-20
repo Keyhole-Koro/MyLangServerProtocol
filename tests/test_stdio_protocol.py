@@ -57,6 +57,7 @@ def run():
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        bufsize=0,
     )
     try:
         send(process, {
@@ -91,6 +92,18 @@ def run():
             },
         })
         hover = receive_response(process, 2)
+        assert hover["result"]["contents"]["value"] == "Loading..."
+
+        send(process, {
+            "jsonrpc": "2.0",
+            "id": 20,
+            "method": "textDocument/hover",
+            "params": {
+                "textDocument": {"uri": uri},
+                "position": position(SOURCE, "add(1", after=1),
+            },
+        })
+        hover = receive_response(process, 20)
         assert "add(i32 a, i32 b) -> i32" in hover["result"]["contents"]["value"]
 
         send(process, {"jsonrpc": "2.0", "id": 3, "method": "shutdown", "params": {}})

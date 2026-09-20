@@ -197,6 +197,33 @@ def run():
                 check(lit in slices, f"width {src!r}: {lit!r} not an exact token slice; got {slices!r}")
             assert_wellformed(decoded, src, "width")
 
+        # Documentation annotations have their own token while surrounding
+        # prose remains comment-colored. Ordinary comments do not promote tags.
+        doc_src = (
+            "/**\n"
+            " * Adds a value.\n"
+            " * @param value Input.\n"
+            " * @return Output.\n"
+            " */\n"
+            "i32 add(i32 value) { return value; }\n"
+            "/// @warning Experimental.\n"
+            "// @param ordinary\n"
+        )
+        doc_decoded = decode(server, doc_src)
+        doc_roles = roles_in(doc_decoded)
+        check("docTag" in doc_roles.get("@param", set()),
+              f"doc tags: @param roles={doc_roles.get('@param')!r}")
+        check("docTag" in doc_roles.get("@return", set()),
+              f"doc tags: @return roles={doc_roles.get('@return')!r}")
+        check("docTag" in doc_roles.get("@warning", set()),
+              f"doc tags: @warning roles={doc_roles.get('@warning')!r}")
+        ordinary_line = [item for item in doc_decoded if item[0] == 7]
+        check(all(item[3] != "docTag" for item in ordinary_line),
+              f"ordinary comment unexpectedly contains docTag: {ordinary_line!r}")
+        check(any(item[0] == 1 and item[3] == "comment" for item in doc_decoded),
+              "block comment continuation line lost comment highlighting")
+        assert_wellformed(doc_decoded, doc_src, "doc tags")
+
         # 4. robustness + well-formedness on hostile inputs
         for src in ROBUSTNESS_INPUTS:
             try:
@@ -255,6 +282,18 @@ def run():
         check(bad_diags and "Expected expression before '}'." in bad_diags[0]["message"],
               f"mlx diagnostics: invalid .mlx missing syntax diagnostic, got {bad_diags!r}")
 
+        # Boolean literals are primary expressions, not only attribute
+        # literals. They must work in returns, initializers, and comparisons.
+        bool_src = (
+            "bool flag(bool x) {\n"
+            "    if (x) { return true; }\n"
+            "    bool fallback = false;\n"
+            "    return fallback == true;\n"
+            "}\n"
+        )
+        check(server.syntax_diagnostics(bool_src) == [],
+              "boolean literals: valid expression use produced diagnostics")
+
         # The split Kernel generic container modules are imported by the same
         # named-import mechanism editors use. Opening this consumer must not
         # surface false syntax diagnostics for Vec<T>, Option<T>, and friends.
@@ -277,6 +316,7 @@ def run():
     print(f"[PASS] lexical mapping seam ({len(LEXICAL_CASES)})")
     print(f"[PASS] documentSymbol ({len(DOCSYM_CASES)})")
     print(f"[PASS] span fidelity ({len(WIDTH_CASES)})")
+    print("[PASS] documentation tag highlighting")
     print(f"[PASS] well-formedness + robustness ({len(ROBUSTNESS_INPUTS)} hostile inputs)")
     print("[PASS] cross-component seam")
     print("[PASS] native MLX syntax LSP integration")

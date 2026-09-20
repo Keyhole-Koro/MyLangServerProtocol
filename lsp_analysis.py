@@ -186,6 +186,16 @@ class CallContext:
     package: Optional[str]
 
 
+@dataclass(frozen=True)
+class DeclarationInfo:
+    name: str
+    kind: str
+    uri: str
+    span: SourceSpan
+    is_exported: bool
+    container: Optional[str] = None
+
+
 @dataclass
 class AnalysisUnit:
     snapshot: DocumentSnapshot
@@ -195,6 +205,7 @@ class AnalysisUnit:
     imported_names: set[str]
     imported_packages: set[str]
     import_sources: Dict[str, str]
+    declarations: List[DeclarationInfo]
     import_targets: Dict[str, str] = field(default_factory=dict)
 
 
@@ -209,6 +220,9 @@ class WorkspaceIndex:
 
     def remove(self, uri: str) -> None:
         self._units.pop(uri, None)
+
+    def get(self, uri: str) -> Optional[AnalysisUnit]:
+        return self._units.get(uri)
 
     def resolve(
         self,
@@ -298,6 +312,7 @@ class FrontendBackend:
             snapshot, tokens, result.get("symbols", [])
         )
         imported_names, imported_packages, import_sources = self._imports(tokens)
+        declarations = self._declarations(snapshot, tokens, result.get("symbols", []))
         unit = AnalysisUnit(
             snapshot,
             tokens,
@@ -306,10 +321,75 @@ class FrontendBackend:
             imported_names,
             imported_packages,
             import_sources,
+            declarations,
         )
         self.invalidate(snapshot.uri)
         self.cache[key] = unit
         return unit
+
+    def _declarations(
+        self,
+        snapshot: DocumentSnapshot,
+        tokens: Sequence[Token],
+        raw_symbols: Sequence[list],
+    ) -> List[DeclarationInfo]:
+        declarations: List[DeclarationInfo] = []
+        token_by_position = {
+            (token.line, token.byte_column, token.byte_length): token
+            for token in tokens
+        }
+        for raw in raw_symbols:
+            if len(raw) < 4:
+                continue
+            key = (int(raw[0]), int(raw[1]), int(raw[2]))
+            token = token_by_position.get(key)
+            kind = str(raw[3])
+            if token is None or kind not in ("function", "method", "struct", "enum", "type"):
+                continue
+            declarations.append(DeclarationInfo(
+                token.text,
+                kind,
+                snapshot.uri,
+                token.span,
+                self._has_export_modifier(tokens, token.index),
+            ))
+
+            if kind != "enum":
+                continue
+            open_index = next(
+                (index for index in range(token.index + 1, len(tokens))
+                 if tokens[index].kind == "L_BRACE"),
+                None,
+            )
+            if open_index is None:
+                continue
+            depth = 0
+            for member in tokens[open_index + 1:]:
+                if member.kind == "L_BRACE":
+                    depth += 1
+                elif member.kind == "R_BRACE":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                elif depth == 0 and member.role == "enumMember":
+                    declarations.append(DeclarationInfo(
+                        member.text,
+                        "enumMember",
+                        snapshot.uri,
+                        member.span,
+                        self._has_export_modifier(tokens, token.index),
+                        token.text,
+                    ))
+        return declarations
+
+    def _has_export_modifier(self, tokens: Sequence[Token], token_index: int) -> bool:
+        for index in range(token_index - 1, -1, -1):
+            kind = tokens[index].kind
+            if kind == "EXPORT":
+                return True
+            if kind in ("SEMICOLON", "L_BRACE", "R_BRACE"):
+                return False
+        return False
 
     def _tokens(self, snapshot: DocumentSnapshot, raw_tokens: Sequence[list]) -> List[Token]:
         tokens: List[Token] = []
@@ -785,6 +865,139 @@ class LanguageFeatures:
             "activeSignature": 0,
             "activeParameter": active,
         }
+
+    def definition(self, snapshot: DocumentSnapshot, position: dict) -> Optional[dict]:
+        unit = self.unit(snapshot)
+        offset = snapshot.line_map.lsp_to_offset(position)
+        token = self._token_at(unit.tokens, offset)
+        if token is None:
+            return None
+
+        exact = next(
+            (item for item in unit.declarations if item.span == token.span),
+            None,
+        )
+        if exact is not None:
+            return self._declaration_location(exact)
+
+        if self._is_callee(unit, token.index):
+            kind = "method" if token.role == "property" else "function"
+            receiver_type = self._receiver_type_for_call(unit, token.index) if kind == "method" else None
+            package = self._package_for_call(unit, token.index) if kind == "function" else None
+            function = self.index.resolve(
+                token.text, snapshot.uri, kind, receiver_type, package
+            )
+            if function is not None:
+                return {
+                    "uri": function.uri,
+                    "range": self.index.get(function.uri).snapshot.line_map.range(function.name_span),
+                }
+
+        container = None
+        if token.role == "enumMember" and token.index >= 2:
+            if unit.tokens[token.index - 1].kind == "COLONCOLON":
+                container = unit.tokens[token.index - 2].text
+        candidates = self._matching_declarations(unit, token.text, token.role, container)
+        if len(candidates) == 1:
+            return self._declaration_location(candidates[0])
+
+        target_uri = self.definition_import_target_at(snapshot, position)
+        target = self.index.get(target_uri) if target_uri is not None else None
+        if target is None:
+            return None
+        candidates = [
+            declaration
+            for declaration in self._matching_declarations(
+                target, token.text, token.role, container
+            )
+            if declaration.is_exported
+        ]
+        return self._declaration_location(candidates[0]) if len(candidates) == 1 else None
+
+    def definition_import_target_at(
+        self, snapshot: DocumentSnapshot, position: dict
+    ) -> Optional[str]:
+        unit = self.unit(snapshot)
+        offset = snapshot.line_map.lsp_to_offset(position)
+        token = self._token_at(unit.tokens, offset)
+        if token is None:
+            return None
+        if token.text in unit.import_targets:
+            return unit.import_targets[token.text]
+        if token.index >= 2 and unit.tokens[token.index - 1].kind in ("DOT", "COLONCOLON"):
+            qualifier = unit.tokens[token.index - 2].text
+            if qualifier in unit.import_targets:
+                return unit.import_targets[qualifier]
+        if self._is_callee(unit, token.index):
+            package = self._package_for_call(unit, token.index)
+            if package in unit.import_targets:
+                return unit.import_targets[package]
+            if token.role == "property":
+                receiver_type = self._receiver_type_for_call(unit, token.index)
+                if receiver_type in unit.import_targets:
+                    return unit.import_targets[receiver_type]
+        return None
+
+    def _matching_declarations(
+        self,
+        unit: AnalysisUnit,
+        name: str,
+        role: Optional[str],
+        container: Optional[str],
+    ) -> List[DeclarationInfo]:
+        compatible = {
+            "function": {"function", "method"},
+            "property": {"method"},
+            "type": {"struct", "enum", "type"},
+            "struct": {"struct"},
+            "enum": {"enum"},
+            "enumMember": {"enumMember"},
+        }.get(role, set())
+        return [
+            declaration
+            for declaration in unit.declarations
+            if declaration.name == name
+            and declaration.kind in compatible
+            and (container is None or declaration.container == container)
+        ]
+
+    def _declaration_location(self, declaration: DeclarationInfo) -> Optional[dict]:
+        unit = self.index.get(declaration.uri)
+        if unit is None:
+            return None
+        return {
+            "uri": declaration.uri,
+            "range": unit.snapshot.line_map.range(declaration.span),
+        }
+
+    def import_target_at(
+        self, snapshot: DocumentSnapshot, position: dict
+    ) -> Optional[str]:
+        """Return the one source import relevant to an interactive position."""
+        unit = self.unit(snapshot)
+        offset = snapshot.line_map.lsp_to_offset(position)
+        token = self._token_at(unit.tokens, offset)
+        name: Optional[str] = None
+        package: Optional[str] = None
+        receiver_type: Optional[str] = None
+
+        if token is not None and token.kind == "IDENTIFIER" and self._is_callee(unit, token.index):
+            name = token.text
+            if token.role == "property":
+                receiver_type = self._receiver_type_for_call(unit, token.index)
+            else:
+                package = self._package_for_call(unit, token.index)
+        else:
+            context = self._call_context(unit, offset)
+            if context is not None:
+                name = context.name
+                package = context.package
+                receiver_type = context.receiver_type
+
+        for key in (package, name, receiver_type):
+            if key is not None and key in unit.import_targets:
+                return unit.import_targets[key]
+        return None
 
     def _token_at(self, tokens: Sequence[Token], offset: int) -> Optional[Token]:
         for token in tokens:
