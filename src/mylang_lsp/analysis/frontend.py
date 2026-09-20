@@ -1,6 +1,6 @@
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from analysis_model import (
+from .models import (
     AnalysisUnit,
     CLOSE_TO_OPEN,
     DeclarationInfo,
@@ -11,7 +11,7 @@ from analysis_model import (
     ParameterInfo,
     Token,
 )
-from document_model import DocumentSnapshot, SourceSpan
+from .documents import DocumentSnapshot, SourceSpan
 
 
 class FrontendBackend:
@@ -481,6 +481,5 @@ class FrontendBackend:
         body_lines = prose[nonempty[0] + 1:] if nonempty else []
         body = "\n".join(body_lines).strip()
         return FunctionDoc(summary, body, param_docs, return_doc, comment_span)
-
 
 

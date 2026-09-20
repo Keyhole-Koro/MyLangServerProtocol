@@ -117,4 +117,3 @@ class DocumentStore:
             return None
         return self.update(uri, text, 0)
 
-

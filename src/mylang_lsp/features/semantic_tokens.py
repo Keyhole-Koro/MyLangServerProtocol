@@ -3,8 +3,8 @@
 import re
 from typing import Callable, Dict, List, Optional, Tuple
 
-from document_model import LineMap
-from source_text import ProtectedSpans, protected_spans, utf16_column
+from ..analysis.documents import LineMap
+from ..source_text import ProtectedSpans, protected_spans, utf16_column
 
 
 TOKEN_TYPES = [

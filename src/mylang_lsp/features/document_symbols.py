@@ -2,7 +2,7 @@
 
 from typing import Callable, List, Optional
 
-from document_model import LineMap
+from ..analysis.documents import LineMap
 
 
 SYMBOL_KIND = {

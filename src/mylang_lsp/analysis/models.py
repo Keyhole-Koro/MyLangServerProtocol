@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from document_model import DocumentSnapshot, SourceSpan
+from .documents import DocumentSnapshot, SourceSpan
 
 @dataclass(frozen=True)
 class Token:
@@ -171,5 +171,4 @@ OPEN_TO_CLOSE = {
     "L_BRACE": "R_BRACE",
 }
 CLOSE_TO_OPEN = {value: key for key, value in OPEN_TO_CLOSE.items()}
-
 

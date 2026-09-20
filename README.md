@@ -33,15 +33,20 @@ The server speaks JSON-RPC 2.0 over stdio.
 
 ## Structure
 
-- `server.py`: JSON-RPC/LSP lifecycle, scheduling, and request dispatch
-- `document_model.py`: immutable document snapshots and position conversion
-- `native_frontend.py`: native syntax-checker process and result cache
-- `analysis_model.py`: shared analysis data and workspace index
-- `frontend_analysis.py`: syntax-checker output to editor metadata
-- `language_features.py`: Hover, Signature Help, and go-to-definition
-- `semantic_tokens.py`, `diagnostics.py`, `document_symbols.py`: individual
-  LSP feature services
+- `server.py`: stable executable wrapper used by the editor extension
 - `lsp_analysis.py`: compatibility exports for existing integrations
+- `src/mylang_lsp/protocol/`: JSON-RPC/LSP lifecycle, scheduling, and dispatch
+- `src/mylang_lsp/analysis/`: document snapshots, shared models, frontend
+  metadata, Hover, Signature Help, and go-to-definition
+- `src/mylang_lsp/features/`: semantic tokens, diagnostics, and document
+  symbols
+- `src/mylang_lsp/frontend/`: native syntax-checker process and result cache
+
+The package can also be launched directly with:
+
+```bash
+PYTHONPATH=src python3 -m mylang_lsp
+```
 
 ## Tests
 

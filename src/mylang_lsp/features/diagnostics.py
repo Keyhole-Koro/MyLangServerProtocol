@@ -2,8 +2,8 @@
 
 from typing import Callable, List, Optional, Tuple
 
-from document_model import LineMap
-from source_text import is_protected, protected_spans, utf16_column
+from ..analysis.documents import LineMap
+from ..source_text import is_protected, protected_spans, utf16_column
 
 
 DIAGNOSTIC_SEVERITY_ERROR = 1

@@ -1,42 +1,12 @@
-"""Compatibility facade for the MyLang analysis API.
+"""Compatibility facade for the MyLang analysis API."""
 
-The implementation is split by responsibility. Importing from this module remains
-supported for extensions, tests, and older integrations.
-"""
+import sys
+from pathlib import Path
 
-from analysis_model import (
-    AnalysisUnit,
-    CLOSE_TO_OPEN,
-    CallContext,
-    DeclarationInfo,
-    FunctionDoc,
-    FunctionInfo,
-    OPEN_TO_CLOSE,
-    ParamDoc,
-    ParameterInfo,
-    Token,
-    WorkspaceIndex,
-)
-from document_model import DocumentSnapshot, DocumentStore, LineMap, SourceSpan
-from frontend_analysis import FrontendBackend
-from language_features import LanguageFeatures
 
-__all__ = [
-    "AnalysisUnit",
-    "CLOSE_TO_OPEN",
-    "CallContext",
-    "DeclarationInfo",
-    "DocumentSnapshot",
-    "DocumentStore",
-    "FrontendBackend",
-    "FunctionDoc",
-    "FunctionInfo",
-    "LanguageFeatures",
-    "LineMap",
-    "OPEN_TO_CLOSE",
-    "ParamDoc",
-    "ParameterInfo",
-    "SourceSpan",
-    "Token",
-    "WorkspaceIndex",
-]
+SOURCE_ROOT = Path(__file__).resolve().parent / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
+
+from mylang_lsp.analysis import *  # noqa: F401,F403,E402
+from mylang_lsp.analysis import __all__  # noqa: E402

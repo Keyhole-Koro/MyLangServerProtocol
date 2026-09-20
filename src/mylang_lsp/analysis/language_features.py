@@ -1,6 +1,6 @@
 from typing import List, Optional, Sequence, Tuple
 
-from analysis_model import (
+from .models import (
     AnalysisUnit,
     CLOSE_TO_OPEN,
     CallContext,
@@ -10,8 +10,8 @@ from analysis_model import (
     Token,
     WorkspaceIndex,
 )
-from document_model import DocumentSnapshot
-from frontend_analysis import FrontendBackend
+from .documents import DocumentSnapshot
+from .frontend import FrontendBackend
 
 
 class LanguageFeatures:
@@ -409,4 +409,3 @@ class LanguageFeatures:
 
     def _utf16_length(self, text: str) -> int:
         return len(text.encode("utf-16-le")) // 2
-
