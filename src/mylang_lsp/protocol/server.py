@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import threading
 from pathlib import Path
@@ -44,6 +45,7 @@ class LspServer:
         self.language_features = LanguageFeatures(self.frontend_analysis, self.workspace_index)
         self.indexing_documents: set[str] = set()
         self.open_documents: set[str] = set()
+        self.workspace_roots: List[Path] = []
         self.semantic_tokens_enabled = True
         self.pending_diagnostics: Dict[str, int] = {}
         self.send_lock = threading.Lock()
@@ -172,6 +174,7 @@ class LspServer:
         if method in {
             "textDocument/hover",
             "textDocument/definition",
+            "textDocument/references",
             "textDocument/signatureHelp",
             "textDocument/semanticTokens/full",
         }:
@@ -210,6 +213,7 @@ class LspServer:
                 "positionEncoding": "utf-16",
                 "hoverProvider": True,
                 "definitionProvider": True,
+                "referencesProvider": True,
                 "signatureHelpProvider": {
                     "triggerCharacters": ["(", ","],
                     "retriggerCharacters": [","],
@@ -217,6 +221,15 @@ class LspServer:
                 "documentSymbolProvider": True,
             }
             init_options = params.get("initializationOptions") or {}
+            workspace_folders = params.get("workspaceFolders") or []
+            root_uris = [folder.get("uri") for folder in workspace_folders]
+            if not root_uris:
+                root_uris = [params.get("rootUri")]
+            self.workspace_roots = [
+                Path(path)
+                for uri in root_uris
+                if uri and (path := self.uri_to_path(uri)) is not None
+            ]
             self.semantic_tokens_enabled = init_options.get("semanticTokens", True)
             if self.semantic_tokens_enabled:
                 capabilities["semanticTokensProvider"] = {
@@ -319,12 +332,41 @@ class LspServer:
             self.index_document(uri)
             position = params.get("position", {})
             result = self.language_features.definition(doc, position)
-            if result is None:
+            visited = set()
+            while result is None:
                 target_uri = self.language_features.definition_import_target_at(doc, position)
-                if target_uri is not None and self.workspace_index.get(target_uri) is None:
-                    self.index_import(target_uri)
-                    result = self.language_features.definition(doc, position)
+                if target_uri is None or target_uri in visited or self.workspace_index.get(target_uri) is not None:
+                    break
+                visited.add(target_uri)
+                self.index_import(target_uri)
+                result = self.language_features.definition(doc, position)
             self.send_response(id_value, result)
+            return
+        if method == "textDocument/references":
+            uri = params["textDocument"]["uri"]
+            doc = self.get_doc(uri)
+            if doc is None:
+                self.send_response(id_value, [])
+                return
+            self.index_document(uri)
+            position = params.get("position", {})
+            target_uri = self.language_features.definition_import_target_at(doc, position)
+            if target_uri is not None and self.workspace_index.get(target_uri) is None:
+                self.index_import(target_uri)
+            name = self.language_features.identifier_at(doc, position)
+            if name is not None:
+                self.index_workspace_candidates(name)
+            for open_uri in list(self.open_documents):
+                self.index_document(open_uri)
+            include_declaration = params.get("context", {}).get(
+                "includeDeclaration", True
+            )
+            self.send_response(
+                id_value,
+                self.language_features.references(
+                    doc, position, bool(include_declaration)
+                ),
+            )
             return
         if method == "textDocument/hover":
             uri = params["textDocument"]["uri"]
@@ -425,6 +467,39 @@ class LspServer:
                 target_doc = self.document_store.load(target_uri, target_path)
         if target_doc is not None:
             self.index_document(target_uri)
+
+    def index_workspace_candidates(self, name: str) -> None:
+        """Index workspace sources that may mention a requested symbol."""
+        needle = name.encode("utf-8")
+        ignored = {".git", ".hg", ".svn", "node_modules", "__pycache__"}
+        for root in self.workspace_roots:
+            if not root.is_dir():
+                continue
+            for directory, directory_names, file_names in os.walk(root):
+                directory_names[:] = [
+                    item for item in directory_names if item not in ignored
+                ]
+                for file_name in file_names:
+                    if not file_name.endswith((".mln", ".mlx")):
+                        continue
+                    path = Path(directory) / file_name
+                    uri = path.as_uri()
+                    if self.workspace_index.get(uri) is not None:
+                        continue
+                    try:
+                        data = path.read_bytes()
+                    except OSError:
+                        continue
+                    if needle not in data:
+                        continue
+                    doc = self.document_store.get(uri)
+                    if doc is None:
+                        try:
+                            doc = self.document_store.load(uri, str(path))
+                        except OSError:
+                            continue
+                    if doc is not None:
+                        self.index_document(uri)
 
     def prepare_hover(self, doc: DocumentSnapshot, position: dict) -> None:
         """Populate just enough index state for a subsequent hover request."""

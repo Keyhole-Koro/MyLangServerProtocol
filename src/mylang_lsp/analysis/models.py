@@ -108,6 +108,10 @@ class WorkspaceIndex:
     def get(self, uri: str) -> Optional[AnalysisUnit]:
         return self._units.get(uri)
 
+    def units(self) -> List[AnalysisUnit]:
+        """Return a snapshot of the currently indexed analysis units."""
+        return list(self._units.values())
+
     def resolve(
         self,
         name: str,
@@ -116,22 +120,40 @@ class WorkspaceIndex:
         receiver_type: Optional[str] = None,
         package: Optional[str] = None,
     ) -> Optional[FunctionInfo]:
+        candidates = self.resolve_all(
+            name, current_uri, kind, receiver_type, package
+        )
+        return candidates[0] if len(candidates) == 1 else None
+
+    def resolve_all(
+        self,
+        name: str,
+        current_uri: str,
+        kind: Optional[str] = None,
+        receiver_type: Optional[str] = None,
+        package: Optional[str] = None,
+    ) -> List[FunctionInfo]:
+        # Import locally to keep the metadata module independent at import time.
+        from .resolution import base_type
+
+        if kind == "method" and receiver_type is None:
+            return []
+        receiver_name = base_type(receiver_type) if receiver_type else None
+
         def matches(function: FunctionInfo) -> bool:
             if function.name != name:
                 return False
             if kind is not None and function.kind != kind:
                 return False
-            if receiver_type is not None and function.receiver_type != receiver_type:
+            if receiver_name is not None and base_type(function.receiver_type or "") != receiver_name:
                 return False
             return True
 
         current = self._units.get(current_uri)
         if current and package is None:
             local = [function for function in current.functions if matches(function)]
-            if len(local) == 1:
-                return local[0]
-            if len(local) > 1:
-                return None
+            if local:
+                return local
         exported = [
             function
             for uri, unit in self._units.items()
@@ -152,6 +174,12 @@ class WorkspaceIndex:
                     )
                 )
                 or (
+                    kind == "method"
+                    and current is not None
+                    and receiver_name in current.imported_names
+                    and uri == current.import_targets.get(receiver_name)
+                )
+                or (
                     package is None
                     and current is not None
                     and name in current.imported_names
@@ -162,7 +190,7 @@ class WorkspaceIndex:
                 )
             )
         ]
-        return exported[0] if len(exported) == 1 else None
+        return exported
 
 
 OPEN_TO_CLOSE = {
@@ -171,4 +199,3 @@ OPEN_TO_CLOSE = {
     "L_BRACE": "R_BRACE",
 }
 CLOSE_TO_OPEN = {value: key for key, value in OPEN_TO_CLOSE.items()}
-

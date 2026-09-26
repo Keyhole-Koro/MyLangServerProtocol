@@ -10,7 +10,9 @@ A lightweight Language Server Protocol implementation for MyLang.
 - vermilion `docTag` semantic highlighting for documentation annotations
 - Hover for function declarations, resolved calls, and call arguments
 - Signature Help with nested-call-aware active parameter selection
-- go-to-definition for functions, methods, structs, enums, types, and enum members
+- go-to-definition for functions, methods, structs, enums, types, and enum
+  members, with a target picker when more than one declaration matches
+- find references for declarations, calls, and function-pointer uses
 - local and relative-import function documentation lookup
 - generic declarations, instantiations, and named-imported templates are
   syntax-checked without treating their angle brackets as relational operators

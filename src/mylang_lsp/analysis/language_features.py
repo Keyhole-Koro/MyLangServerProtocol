@@ -12,6 +12,7 @@ from .models import (
 )
 from .documents import DocumentSnapshot
 from .frontend import FrontendBackend
+from .resolution import ExpressionResolver, base_type, generic_base_index
 
 
 class LanguageFeatures:
@@ -34,12 +35,8 @@ class LanguageFeatures:
         token = self._token_at(unit.tokens, offset)
         if function is None and token is not None and token.kind == "IDENTIFIER":
             if self._is_callee(unit, token.index):
-                kind = "method" if token.role == "property" else "function"
-                receiver_type = self._receiver_type_for_call(unit, token.index) if kind == "method" else None
-                package = self._package_for_call(unit, token.index) if kind == "function" else None
-                function = self.index.resolve(
-                    token.text, snapshot.uri, kind, receiver_type, package
-                )
+                functions = ExpressionResolver(self.frontend, self.index, unit).functions(token.index)
+                function = functions[0] if len(functions) == 1 else None
         if function is not None:
             span = token.span if token is not None else function.name_span
             return {
@@ -122,7 +119,9 @@ class LanguageFeatures:
             "activeParameter": active,
         }
 
-    def definition(self, snapshot: DocumentSnapshot, position: dict) -> Optional[dict]:
+    def definition(
+        self, snapshot: DocumentSnapshot, position: dict
+    ) -> Optional[dict | List[dict]]:
         unit = self.unit(snapshot)
         offset = snapshot.line_map.lsp_to_offset(position)
         token = self._token_at(unit.tokens, offset)
@@ -136,26 +135,66 @@ class LanguageFeatures:
         if exact is not None:
             return self._declaration_location(exact)
 
-        if self._is_callee(unit, token.index):
-            kind = "method" if token.role == "property" else "function"
-            receiver_type = self._receiver_type_for_call(unit, token.index) if kind == "method" else None
-            package = self._package_for_call(unit, token.index) if kind == "function" else None
-            function = self.index.resolve(
-                token.text, snapshot.uri, kind, receiver_type, package
-            )
-            if function is not None:
-                return {
-                    "uri": function.uri,
-                    "range": self.index.get(function.uri).snapshot.line_map.range(function.name_span),
-                }
+        resolver = ExpressionResolver(self.frontend, self.index, unit)
+        if token.role in ("variable", "parameter", "function") and resolver.binding(token.text, token.index):
+            return None
+        if self._is_callee(unit, token.index) and token.role not in ("enumMember", "resultVariant"):
+            functions = resolver.functions(token.index)
+            if functions:
+                return self._definition_locations([
+                    DeclarationInfo(
+                        function.name,
+                        function.kind,
+                        function.uri,
+                        function.name_span,
+                        function.is_exported,
+                    )
+                    for function in functions
+                ])
+            # A failed typed call must not fall back to unrelated declarations
+            # with the same spelling (including methods of other receivers).
+            return None
 
+        functions = self._function_value_targets(unit, token)
+        if functions:
+            return self._definition_locations([
+                DeclarationInfo(
+                    function.name,
+                    function.kind,
+                    function.uri,
+                    function.name_span,
+                    function.is_exported,
+                )
+                    for function in functions
+                ])
+
+        if token.role == "property":
+            return None
         container = None
-        if token.role == "enumMember" and token.index >= 2:
+        if token.role in ("enumMember", "resultVariant") and token.index >= 2:
             if unit.tokens[token.index - 1].kind == "COLONCOLON":
-                container = unit.tokens[token.index - 2].text
-        candidates = self._matching_declarations(unit, token.text, token.role, container)
-        if len(candidates) == 1:
-            return self._declaration_location(candidates[0])
+                qualifier = token.index - 2
+                if unit.tokens[qualifier].kind in ("GT", "RSH"):
+                    qualifier = generic_base_index(unit.tokens, qualifier)
+                if qualifier >= 0:
+                    container = unit.tokens[qualifier].text
+        role = token.role
+        if token.text in unit.imported_names:
+            before = unit.tokens[:token.index]
+            boundary = max((t.index for t in before if t.kind == "SEMICOLON"), default=-1)
+            if any(t.kind == "IMPORT" for t in before[boundary + 1:]):
+                role = "importedSymbol"
+        qualified_import = role == "importedSymbol" or (
+            token.index >= 2
+            and unit.tokens[token.index - 1].kind in ("DOT", "COLONCOLON")
+            and unit.tokens[token.index - 2].text in unit.import_targets
+        )
+        if not qualified_import:
+            candidates = self._matching_declarations(
+                unit, token.text, role, container
+            )
+            if candidates:
+                return self._definition_locations(candidates)
 
         target_uri = self.definition_import_target_at(snapshot, position)
         target = self.index.get(target_uri) if target_uri is not None else None
@@ -164,11 +203,59 @@ class LanguageFeatures:
         candidates = [
             declaration
             for declaration in self._matching_declarations(
-                target, token.text, token.role, container
+                target, token.text, role, container
             )
             if declaration.is_exported
         ]
-        return self._declaration_location(candidates[0]) if len(candidates) == 1 else None
+        return self._definition_locations(candidates)
+
+    def references(
+        self,
+        snapshot: DocumentSnapshot,
+        position: dict,
+        include_declaration: bool = True,
+    ) -> List[dict]:
+        """Find references to the symbol at *position* in indexed units."""
+        unit = self.unit(snapshot)
+        offset = snapshot.line_map.lsp_to_offset(position)
+        selected = self._token_at(unit.tokens, offset)
+        if selected is None:
+            return []
+
+        targets = self._location_keys(self.definition(snapshot, position))
+        if not targets:
+            return []
+
+        locations: dict[tuple, dict] = {}
+        for candidate_unit in self.index.units():
+            for token in candidate_unit.tokens:
+                if token.kind != "IDENTIFIER" or token.text != selected.text:
+                    continue
+                token_location = {
+                    "uri": candidate_unit.snapshot.uri,
+                    "range": candidate_unit.snapshot.line_map.range(token.span),
+                }
+                token_key = self._location_key(token_location)
+                if not include_declaration and token_key in targets:
+                    continue
+                definitions = self.definition(
+                    candidate_unit.snapshot,
+                    candidate_unit.snapshot.line_map.offset_to_lsp(token.span.start),
+                )
+                if targets.intersection(self._location_keys(definitions)):
+                    locations[token_key] = token_location
+
+        return [locations[key] for key in sorted(locations)]
+
+    def identifier_at(
+        self, snapshot: DocumentSnapshot, position: dict
+    ) -> Optional[str]:
+        unit = self.unit(snapshot)
+        offset = snapshot.line_map.lsp_to_offset(position)
+        token = self._token_at(unit.tokens, offset)
+        if token is None or token.kind != "IDENTIFIER":
+            return None
+        return token.text
 
     def definition_import_target_at(
         self, snapshot: DocumentSnapshot, position: dict
@@ -178,6 +265,18 @@ class LanguageFeatures:
         token = self._token_at(unit.tokens, offset)
         if token is None:
             return None
+        resolver = ExpressionResolver(self.frontend, self.index, unit)
+        if self._is_callee(unit, token.index) or token.role == "property":
+            resolver.functions(token.index)
+            if resolver.pending_import is not None:
+                return resolver.pending_import
+        if token.role in ("enumMember", "resultVariant") and token.index >= 2:
+            qualifier = token.index - 2
+            if unit.tokens[token.index - 1].kind == "COLONCOLON":
+                if unit.tokens[qualifier].kind in ("GT", "RSH"):
+                    qualifier = generic_base_index(unit.tokens, qualifier)
+                if qualifier >= 0 and unit.tokens[qualifier].text in unit.import_targets:
+                    return unit.import_targets[unit.tokens[qualifier].text]
         if token.text in unit.import_targets:
             return unit.import_targets[token.text]
         if token.index >= 2 and unit.tokens[token.index - 1].kind in ("DOT", "COLONCOLON"):
@@ -190,9 +289,68 @@ class LanguageFeatures:
                 return unit.import_targets[package]
             if token.role == "property":
                 receiver_type = self._receiver_type_for_call(unit, token.index)
-                if receiver_type in unit.import_targets:
-                    return unit.import_targets[receiver_type]
+                receiver_name = base_type(receiver_type or "")
+                if receiver_name in unit.import_targets:
+                    return unit.import_targets[receiver_name]
+        value_context = self._function_value_context(unit, token)
+        if value_context is not None:
+            _kind, receiver_type, package = value_context
+            for key in (package, token.text, receiver_type):
+                if key is not None and key in unit.import_targets:
+                    return unit.import_targets[key]
         return None
+
+    def _function_value_targets(
+        self, unit: AnalysisUnit, token: Token
+    ) -> List[FunctionInfo]:
+        context = self._function_value_context(unit, token)
+        if context is None:
+            return []
+        kind, receiver_type, package = context
+        return self.index.resolve_all(
+            token.text,
+            unit.snapshot.uri,
+            kind,
+            receiver_type,
+            package,
+        )
+
+    def _function_value_context(
+        self, unit: AnalysisUnit, token: Token
+    ) -> Optional[Tuple[str, Optional[str], Optional[str]]]:
+        """Describe an identifier used as a function pointer rather than called."""
+        if token.kind != "IDENTIFIER" or self._is_callee(unit, token.index):
+            return None
+        if token.role == "variable":
+            if ExpressionResolver(self.frontend, self.index, unit).binding(token.text, token.index):
+                return None
+            return "function", None, None
+        if token.role != "property":
+            return None
+        package = self._package_for_call(unit, token.index)
+        if package is not None:
+            return "function", None, package
+        receiver_type = self._receiver_type_for_call(unit, token.index)
+        if receiver_type is not None:
+            return "method", receiver_type, None
+        return None
+
+    def _location_keys(self, result: Optional[dict | List[dict]]) -> set[tuple]:
+        if result is None:
+            return set()
+        locations = result if isinstance(result, list) else [result]
+        return {self._location_key(location) for location in locations}
+
+    def _location_key(self, location: dict) -> tuple:
+        start = location["range"]["start"]
+        end = location["range"]["end"]
+        return (
+            location["uri"],
+            start["line"],
+            start["character"],
+            end["line"],
+            end["character"],
+        )
 
     def _matching_declarations(
         self,
@@ -208,6 +366,8 @@ class LanguageFeatures:
             "struct": {"struct"},
             "enum": {"enum"},
             "enumMember": {"enumMember"},
+            "resultVariant": {"enumMember"},
+            "importedSymbol": {"function", "struct", "enum", "type"},
         }.get(role, set())
         return [
             declaration
@@ -226,6 +386,18 @@ class LanguageFeatures:
             "range": unit.snapshot.line_map.range(declaration.span),
         }
 
+    def _definition_locations(
+        self, declarations: Sequence[DeclarationInfo]
+    ) -> Optional[dict | List[dict]]:
+        locations = [
+            location
+            for declaration in declarations
+            if (location := self._declaration_location(declaration)) is not None
+        ]
+        if not locations:
+            return None
+        return locations[0] if len(locations) == 1 else locations
+
     def import_target_at(
         self, snapshot: DocumentSnapshot, position: dict
     ) -> Optional[str]:
@@ -238,6 +410,9 @@ class LanguageFeatures:
         receiver_type: Optional[str] = None
 
         if token is not None and token.kind == "IDENTIFIER" and self._is_callee(unit, token.index):
+            target = self.definition_import_target_at(snapshot, position)
+            if target is not None:
+                return target
             name = token.text
             if token.role == "property":
                 receiver_type = self._receiver_type_for_call(unit, token.index)
@@ -250,7 +425,13 @@ class LanguageFeatures:
                 package = context.package
                 receiver_type = context.receiver_type
 
-        for key in (package, name, receiver_type):
+                resolver = ExpressionResolver(self.frontend, self.index, unit)
+                callee = next(t for t in unit.tokens if t.span == context.name_span)
+                resolver.functions(callee.index)
+                if resolver.pending_import is not None:
+                    return resolver.pending_import
+
+        for key in (package, name, base_type(receiver_type or "")):
             if key is not None and key in unit.import_targets:
                 return unit.import_targets[key]
         return None
@@ -287,6 +468,9 @@ class LanguageFeatures:
         assert name_index is not None
         active = self._active_parameter(tokens, open_index, offset)
         name = tokens[name_index]
+        resolver = ExpressionResolver(self.frontend, self.index, unit)
+        if name_index > 0 and tokens[name_index - 1].kind not in ("DOT", "MEMBER") and resolver.binding(name.text, name_index):
+            return None
         kind = "method" if name.role == "property" else "function"
         receiver_type = self._receiver_type_for_call(unit, name_index) if kind == "method" else None
         package = self._package_for_call(unit, name_index) if kind == "function" else None
@@ -295,29 +479,10 @@ class LanguageFeatures:
         )
 
     def _package_for_call(self, unit: AnalysisUnit, name_index: int) -> Optional[str]:
-        tokens = unit.tokens
-        if name_index < 2 or tokens[name_index - 1].kind != "DOT":
-            return None
-        qualifier = tokens[name_index - 2]
-        if qualifier.kind == "IDENTIFIER" and qualifier.text in unit.imported_packages:
-            return qualifier.text
-        return None
+        return ExpressionResolver(self.frontend, self.index, unit).package(name_index)
 
     def _receiver_type_for_call(self, unit: AnalysisUnit, name_index: int) -> Optional[str]:
-        tokens = unit.tokens
-        if name_index < 2 or tokens[name_index - 1].kind not in ("DOT", "MEMBER"):
-            return None
-        receiver = tokens[name_index - 2]
-        if receiver.kind != "IDENTIFIER":
-            return None
-        for index in range(name_index - 3, 0, -1):
-            token = tokens[index]
-            if token.text != receiver.text or token.role not in ("variable", "parameter"):
-                continue
-            declared = self.frontend._declared_type(tokens[max(0, index - 8):index])
-            if declared is not None:
-                return declared
-        return None
+        return ExpressionResolver(self.frontend, self.index, unit).receiver_type(name_index)
 
     def _callee_before_open(self, tokens: Sequence[Token], open_index: int) -> Optional[int]:
         if open_index <= 0:

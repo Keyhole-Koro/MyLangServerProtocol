@@ -48,6 +48,46 @@ def test(server):
         position(unresolved_source, "missing", after=1),
     ) is None
 
+    ambiguous_source = """enum First { ITEM };
+enum Second { ITEM };
+enum Duplicate { VALUE };
+enum Duplicate { VALUE };
+i32 main() {
+    First first = First::ITEM;
+    Second second = Second::ITEM;
+    Duplicate duplicate = Duplicate::VALUE;
+    return 0;
+}
+"""
+    ambiguous = snapshot(ambiguous_source, "ambiguous-definition.mln")
+
+    # The enum qualifier disambiguates identical member names.
+    first_item = server.language_features.definition(
+        ambiguous,
+        position(ambiguous_source, "ITEM", occurrence=2, after=1),
+    )
+    second_item = server.language_features.definition(
+        ambiguous,
+        position(ambiguous_source, "ITEM", occurrence=3, after=1),
+    )
+    assert isinstance(first_item, dict)
+    assert isinstance(second_item, dict)
+    assert first_item["range"]["start"] == position(
+        ambiguous_source, "ITEM", occurrence=0
+    )
+    assert second_item["range"]["start"] == position(
+        ambiguous_source, "ITEM", occurrence=1
+    )
+
+    # LSP accepts multiple Locations; VS Code presents these as selectable
+    # definition targets instead of silently refusing to navigate.
+    duplicate_value = server.language_features.definition(
+        ambiguous,
+        position(ambiguous_source, "VALUE", occurrence=2, after=1),
+    )
+    assert isinstance(duplicate_value, list)
+    assert len(duplicate_value) == 2
+
 
 if __name__ == "__main__":
     run_with_server(test)

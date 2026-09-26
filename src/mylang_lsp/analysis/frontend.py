@@ -12,6 +12,7 @@ from .models import (
     Token,
 )
 from .documents import DocumentSnapshot, SourceSpan
+from .resolution import type_before
 
 
 class FrontendBackend:
@@ -96,7 +97,7 @@ class FrontendBackend:
                     if depth == 0:
                         break
                     depth -= 1
-                elif depth == 0 and member.role == "enumMember":
+                elif depth == 0 and member.role in ("enumMember", "resultVariant"):
                     declarations.append(DeclarationInfo(
                         member.text,
                         "enumMember",
@@ -350,15 +351,10 @@ class FrontendBackend:
             )
 
     def _declared_type(self, tokens: Sequence[Token]) -> Optional[str]:
-        builtin = {
-            "BOOL", "U8", "U16", "I32", "U32", "CHAR", "FLOAT", "DOUBLE",
-            "VOID", "LONG", "SHORT",
-        }
-        candidate = next(
-            (token for token in reversed(tokens) if token.role == "type" or token.kind in builtin),
-            None,
-        )
-        return candidate.text if candidate is not None else None
+        end = len(tokens) - 1
+        if end >= 0 and tokens[end].role in ("variable", "parameter"):
+            end -= 1
+        return type_before(tokens, end)
 
     def _joined_source(self, snapshot: DocumentSnapshot, tokens: Sequence[Token]) -> str:
         if not tokens:
@@ -481,5 +477,4 @@ class FrontendBackend:
         body_lines = prose[nonempty[0] + 1:] if nonempty else []
         body = "\n".join(body_lines).strip()
         return FunctionDoc(summary, body, param_docs, return_doc, comment_span)
-
 
