@@ -8,9 +8,9 @@ from feature_test_support import position, snapshot
 from test_references import CaptureServer
 
 
-def target(server, source, use, declaration, name, occurrence=0):
+def target(server, source, use, declaration, name, occurrence=0, use_after=1):
     doc = snapshot(source, name)
-    location = server.language_features.definition(doc, position(source, use, occurrence, 1))
+    location = server.language_features.definition(doc, position(source, use, occurrence, use_after))
     assert isinstance(location, dict), (name, use, location)
     assert location["uri"] == doc.uri
     assert location["range"]["start"] == position(source, declaration), (name, use, location)
@@ -52,6 +52,14 @@ i32 main() { Box<A> box; return box.take().get(); }
 """
     target(server, generic, "take", "take() { return box", "generic-chain.mln", 2)
     target(server, generic, "get", "get() { return a", "generic-chain.mln", 1)
+
+    const_generic = """struct InlineString<const N> { u8 data[N]; i32 length; };
+i32 (ref InlineString<N> text) len() { return text.length; }
+i32 main() { InlineString<32> text; return text.len(); }
+"""
+    target(server, const_generic, "InlineString", "InlineString<const", "const-generic.mln", 2)
+    target(server, const_generic, "len", "len() { return", "const-generic.mln", 1)
+    target(server, const_generic, "N", "N> {", "const-generic.mln", 1, 0)
 
     variants = """enum Result<T,E> { Ok(T), Err(E) };
 enum Other { Ok(i32), Err(i32) };
@@ -127,20 +135,23 @@ def test_builtin_string_methods():
         root = Path(directory)
         library = root / "str.mln"
         source = """package str;
+export struct InlineString<const N> { u8 data[N]; i32 length; };
 export i32 (str self) len() { return self.length; }
 export str (char* self) as_str() { return str { data: self, length: 0 }; }
-export str (i32 self) to_str(char* buffer) { return str { data: buffer, length: 0 }; }
+export str (ref InlineString<N> self) as_str() { return str { data: (char*)(&self.data[0]), length: self.length }; }
+export InlineString<12> (i32 self) to_string() { return InlineString<12> {}; }
 """
         library.write_text(source)
         caller = root / "caller.mln"
         text = """import str from "str.mln";
+import { InlineString } from "str.mln";
 i32 main() {
     str value = "hello";
     char* legacy = "old";
-    char digits[12];
     if ("x".len() != value.len()) { return 1; }
     if (legacy.as_str().len() != 3) { return 2; }
-    return 42.to_str(&digits[0]).len();
+    InlineString<12> digits = 42.to_string();
+    return digits.as_str().len();
 }
 """
         caller.write_text(text)
@@ -149,7 +160,9 @@ i32 main() {
             ("len", 1, "len()"),
             ("as_str", 0, "as_str()"),
             ("len", 2, "len()"),
-            ("to_str", 0, "to_str("),
+            ("InlineString", 0, "InlineString<const"),
+            ("to_string", 0, "to_string()"),
+            ("as_str", 1, "as_str() { return str { data: (char*)"),
             ("len", 3, "len()"),
         ]
         for needle, occurrence, declaration in cases:

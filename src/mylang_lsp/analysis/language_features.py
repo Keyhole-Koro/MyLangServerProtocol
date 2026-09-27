@@ -135,6 +135,13 @@ class LanguageFeatures:
         if exact is not None:
             return self._declaration_location(exact)
 
+        generic_parameter = self._generic_parameter_declaration(unit, token)
+        if generic_parameter is not None:
+            return {
+                "uri": snapshot.uri,
+                "range": snapshot.line_map.range(generic_parameter.span),
+            }
+
         resolver = ExpressionResolver(self.frontend, self.index, unit)
         if token.role in ("variable", "parameter", "function") and resolver.binding(token.text, token.index):
             return None
@@ -376,6 +383,86 @@ class LanguageFeatures:
             and declaration.kind in compatible
             and (container is None or declaration.container == container)
         ]
+
+    def _generic_parameter_declaration(
+        self, unit: AnalysisUnit, selected: Token
+    ) -> Optional[Token]:
+        """Resolve a type/const parameter inside its declaration's scope.
+
+        Generic parameters are syntax symbols rather than workspace-level type
+        declarations. Keeping this lookup lexical prevents two unrelated
+        `T`/`N` parameters from becoming ambiguous definition targets.
+        """
+        if selected.kind != "IDENTIFIER" or selected.role != "type":
+            return None
+        tokens = unit.tokens
+        scopes: List[Tuple[int, int, List[Token]]] = []
+
+        def generic_close(open_index: int) -> Optional[int]:
+            depth = 1
+            for index in range(open_index + 1, len(tokens)):
+                if tokens[index].kind == "LT":
+                    depth += 1
+                elif tokens[index].kind == "GT":
+                    depth -= 1
+                elif tokens[index].kind == "RSH":
+                    depth -= 2
+                if depth <= 0:
+                    return index
+            return None
+
+        def scope_end(after: int) -> int:
+            open_brace = next(
+                (index for index in range(after + 1, len(tokens))
+                 if tokens[index].kind in ("L_BRACE", "SEMICOLON")),
+                len(tokens) - 1,
+            )
+            if tokens[open_brace].kind == "SEMICOLON":
+                return open_brace
+            depth = 1
+            for index in range(open_brace + 1, len(tokens)):
+                if tokens[index].kind == "L_BRACE":
+                    depth += 1
+                elif tokens[index].kind == "R_BRACE":
+                    depth -= 1
+                    if depth == 0:
+                        return index
+            return len(tokens) - 1
+
+        for index in range(len(tokens) - 2):
+            declaration = (
+                tokens[index].kind in ("STRUCT", "ENUM")
+                and tokens[index + 1].kind == "IDENTIFIER"
+                and tokens[index + 2].kind == "LT"
+            )
+            function = (
+                tokens[index].kind == "IDENTIFIER"
+                and tokens[index].role in ("function", "method")
+                and tokens[index + 1].kind == "LT"
+            )
+            if not declaration and not function:
+                continue
+            open_index = index + (2 if declaration else 1)
+            close_index = generic_close(open_index)
+            if close_index is None:
+                continue
+            parameters = [
+                token for token in tokens[open_index + 1:close_index]
+                if token.kind == "IDENTIFIER" and token.role == "type"
+            ]
+            if parameters:
+                scopes.append((index, scope_end(close_index), parameters))
+
+        candidates = [
+            (end - start, parameter)
+            for start, end, parameters in scopes
+            if start <= selected.index <= end
+            for parameter in parameters
+            if parameter.text == selected.text
+        ]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda item: item[0])[1]
 
     def _declaration_location(self, declaration: DeclarationInfo) -> Optional[dict]:
         unit = self.index.get(declaration.uri)

@@ -14,11 +14,15 @@ A lightweight Language Server Protocol implementation for MyLang.
   members, with a target picker when more than one declaration matches
 - find references for declarations, calls, and function-pointer uses
 - local and relative-import function documentation lookup
-- generic declarations, instantiations, and named-imported templates are
+- generic declarations (including `const N` capacity parameters),
+  instantiations, and named-imported templates are
   syntax-checked without treating their angle brackets as relational operators
 
 Generic type arguments are exposed as `type` semantic tokens. This includes
-container code such as `Vec<Node>` and calls such as `vec_init<i32>(...)`.
+container code such as `Vec<Node>` and calls such as `vec_init<i32>(...)`;
+numeric const arguments such as the `128` in `InlineString<128>` remain number
+tokens. Go-to-definition resolves a const parameter use such as `data[N]` to
+its lexical `const N` declaration.
 The server resolves relative `.mln` imports for Hover, Signature Help, and
 go-to-definition. Completion is not implemented yet.
 
