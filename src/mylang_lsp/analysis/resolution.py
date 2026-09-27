@@ -181,6 +181,8 @@ class ExpressionResolver:
             return self.expression_type(opening - 1, at, depth + 1) if opening is not None else None
         if token.kind == "STRING_LITERAL":
             return "str"
+        if token.kind == "NUMBER":
+            return "i32"
         if token.kind != "IDENTIFIER":
             return None
         if end >= 2 and tokens[end - 1].kind in ("DOT", "MEMBER"):

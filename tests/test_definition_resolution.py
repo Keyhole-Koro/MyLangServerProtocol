@@ -129,6 +129,7 @@ def test_builtin_string_methods():
         source = """package str;
 export i32 (str self) len() { return self.length; }
 export str (char* self) as_str() { return str { data: self, length: 0 }; }
+export str (i32 self) to_str(char* buffer) { return str { data: buffer, length: 0 }; }
 """
         library.write_text(source)
         caller = root / "caller.mln"
@@ -136,8 +137,10 @@ export str (char* self) as_str() { return str { data: self, length: 0 }; }
 i32 main() {
     str value = "hello";
     char* legacy = "old";
+    char digits[12];
     if ("x".len() != value.len()) { return 1; }
-    return legacy.as_str().len();
+    if (legacy.as_str().len() != 3) { return 2; }
+    return 42.to_str(&digits[0]).len();
 }
 """
         caller.write_text(text)
@@ -146,6 +149,8 @@ i32 main() {
             ("len", 1, "len()"),
             ("as_str", 0, "as_str()"),
             ("len", 2, "len()"),
+            ("to_str", 0, "to_str("),
+            ("len", 3, "len()"),
         ]
         for needle, occurrence, declaration in cases:
             server = CaptureServer()
