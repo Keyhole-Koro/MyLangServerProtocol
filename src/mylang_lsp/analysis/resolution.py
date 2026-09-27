@@ -13,6 +13,8 @@ from .models import AnalysisUnit, Token, WorkspaceIndex
 
 BUILTINS = {"BOOL", "U8", "U16", "I32", "U32", "CHAR", "FLOAT", "DOUBLE",
             "VOID", "LONG", "SHORT"}
+BUILTIN_TYPE_NAMES = {"bool", "u8", "u16", "i32", "u32", "char", "float",
+                      "double", "void", "long", "short", "str"}
 MODIFIERS = {"CONST", "REF", "MUT", "ASTARISK"}
 
 
@@ -132,11 +134,24 @@ class ExpressionResolver:
         receiver = self.receiver_type(name_index, depth) if method else None
         if method and receiver is None:
             return []
-        target = self.unit.import_targets.get(package or (base_type(receiver) if receiver else token.text))
+        receiver_name = base_type(receiver) if receiver else None
+        target = self.unit.import_targets.get(package or (receiver_name or token.text))
         if target and self.index.get(target) is None:
             self.pending_import = target
-        return self.index.resolve_all(token.text, self.unit.snapshot.uri,
-                                      "method" if method else "function", receiver, package)
+        matches = self.index.resolve_all(token.text, self.unit.snapshot.uri,
+                                         "method" if method else "function", receiver, package)
+        if matches:
+            return matches
+        # Methods on compiler-known types live in ordinary imported packages
+        # (not in a declaration imported under the receiver's name). Load
+        # those packages lazily until the defining module is indexed.
+        if method and receiver_name in BUILTIN_TYPE_NAMES:
+            for imported_package in self.unit.imported_packages:
+                candidate = self.unit.import_targets.get(imported_package)
+                if candidate and self.index.get(candidate) is None:
+                    self.pending_import = candidate
+                    break
+        return matches
 
     def expression_type(self, end, at, depth=0):
         if end < 0 or depth > 64:
@@ -164,6 +179,8 @@ class ExpressionResolver:
         if token.kind == "R_BRACKET":
             opening = self.frontend._matching_open(tokens, end)
             return self.expression_type(opening - 1, at, depth + 1) if opening is not None else None
+        if token.kind == "STRING_LITERAL":
+            return "str"
         if token.kind != "IDENTIFIER":
             return None
         if end >= 2 and tokens[end - 1].kind in ("DOT", "MEMBER"):

@@ -134,7 +134,7 @@ class WorkspaceIndex:
         package: Optional[str] = None,
     ) -> List[FunctionInfo]:
         # Import locally to keep the metadata module independent at import time.
-        from .resolution import base_type
+        from .resolution import BUILTIN_TYPE_NAMES, base_type
 
         if kind == "method" and receiver_type is None:
             return []
@@ -178,6 +178,15 @@ class WorkspaceIndex:
                     and current is not None
                     and receiver_name in current.imported_names
                     and uri == current.import_targets.get(receiver_name)
+                )
+                or (
+                    kind == "method"
+                    and current is not None
+                    and receiver_name in BUILTIN_TYPE_NAMES
+                    and uri in {
+                        current.import_targets.get(package_name)
+                        for package_name in current.imported_packages
+                    }
                 )
                 or (
                     package is None

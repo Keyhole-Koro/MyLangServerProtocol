@@ -122,6 +122,46 @@ i32 main() {
                 server.stop_syntax_checker()
 
 
+def test_builtin_string_methods():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        library = root / "str.mln"
+        source = """package str;
+export i32 (str self) len() { return self.length; }
+export str (char* self) as_str() { return str { data: self, length: 0 }; }
+"""
+        library.write_text(source)
+        caller = root / "caller.mln"
+        text = """import str from "str.mln";
+i32 main() {
+    str value = "hello";
+    char* legacy = "old";
+    if ("x".len() != value.len()) { return 1; }
+    return legacy.as_str().len();
+}
+"""
+        caller.write_text(text)
+        cases = [
+            ("len", 0, "len()"),
+            ("len", 1, "len()"),
+            ("as_str", 0, "as_str()"),
+            ("len", 2, "len()"),
+        ]
+        for needle, occurrence, declaration in cases:
+            server = CaptureServer()
+            try:
+                server.document_store.update(caller.as_uri(), text, 1)
+                server.handle({"id": 1, "method": "textDocument/definition", "params": {
+                    "textDocument": {"uri": caller.as_uri()},
+                    "position": position(text, needle, occurrence, 1)}})
+                result = server.messages[-1]["result"]
+                assert isinstance(result, dict), (needle, occurrence, result)
+                assert result["uri"] == library.as_uri()
+                assert result["range"]["start"] == position(source, declaration)
+            finally:
+                server.stop_syntax_checker()
+
+
 if __name__ == "__main__":
     server = CaptureServer()
     try:
@@ -129,4 +169,5 @@ if __name__ == "__main__":
     finally:
         server.stop_syntax_checker()
     test_imports()
+    test_builtin_string_methods()
     print("[PASS] scoped definition resolution and cold imports")
