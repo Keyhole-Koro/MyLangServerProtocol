@@ -294,6 +294,19 @@ def run():
         check(server.syntax_diagnostics(bool_src) == [],
               "boolean literals: valid expression use produced diagnostics")
 
+        # Casts to imported nested generic pointer types are ordinary MyLang
+        # syntax. The LSP grammar must accept the same cast the compiler does.
+        generic_pointer_cast = (
+            'import { Result } from "result.mln";\n'
+            'import { Option } from "option.mln";\n'
+            "void handle(Request* m) {\n"
+            "    Result<Option<i32>, UiError>* out = "
+            "(Result<Option<i32>, UiError>*)m->result_out;\n"
+            "}\n"
+        )
+        check(server.syntax_diagnostics(generic_pointer_cast) == [],
+              "generic pointer cast: valid cast produced syntax diagnostics")
+
         # The split Kernel generic container modules are imported by the same
         # named-import mechanism editors use. Opening this consumer must not
         # surface false syntax diagnostics for Vec<T>, Option<T>, and friends.
