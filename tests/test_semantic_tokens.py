@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import server as srv  # noqa: E402
-from feature_test_support import fixture_text  # noqa: E402
+from lsp_testkit import fixture_text  # noqa: E402
 
 INV = {i: name for name, i in srv.TOKEN_TYPE_INDEX.items()}
 

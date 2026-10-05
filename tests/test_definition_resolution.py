@@ -4,7 +4,7 @@
 import tempfile
 from pathlib import Path
 
-from feature_test_support import CaptureServer, fixture_text, position, snapshot
+from lsp_testkit import LspTestServer, fixture_text, position, snapshot
 
 
 def target(server, source, use, declaration, name, occurrence=0, use_after=1):
@@ -61,7 +61,7 @@ def test_imports():
                  ("Counter", 1, "Counter {"), ("Result", 0, "Result<T"),
                  ("Ok", 0, "Ok(T)")]
         for needle, occurrence, declaration in cases:
-            server = CaptureServer()
+            server = LspTestServer()
             try:
                 server.document_store.update(caller.as_uri(), text, 1)
                 server.handle({"id": 1, "method": "textDocument/definition", "params": {
@@ -96,7 +96,7 @@ def test_builtin_string_methods():
             ("len", 3, "len()"),
         ]
         for needle, occurrence, declaration in cases:
-            server = CaptureServer()
+            server = LspTestServer()
             try:
                 server.document_store.update(caller.as_uri(), text, 1)
                 server.handle({"id": 1, "method": "textDocument/definition", "params": {
@@ -111,7 +111,7 @@ def test_builtin_string_methods():
 
 
 if __name__ == "__main__":
-    server = CaptureServer()
+    server = LspTestServer()
     try:
         test_local(server)
     finally:

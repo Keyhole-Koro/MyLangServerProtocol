@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Go-to-definition resolution for functions and named declarations."""
 
-from feature_test_support import fixture_text, position, run_with_server, snapshot
+from lsp_testkit import fixture_text, position, run_with_server, snapshot
 
 
 SOURCE = fixture_text("definition/basic.mln")

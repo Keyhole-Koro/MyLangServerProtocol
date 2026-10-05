@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Hover resolution, rendering, and UTF-16 range tests."""
 
-from feature_test_support import fixture_text, position, run_with_server, snapshot
+from lsp_testkit import fixture_text, position, run_with_server, snapshot
 
 
 SOURCE = fixture_text("hover/basic.mln")

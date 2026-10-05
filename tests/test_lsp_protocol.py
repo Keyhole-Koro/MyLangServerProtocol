@@ -4,14 +4,14 @@
 import tempfile
 from pathlib import Path
 
-from feature_test_support import CaptureServer, fixture_text, position
+from lsp_testkit import LspTestServer, fixture_text, position
 
 
 SOURCE = fixture_text("protocol/basic.mln")
 
 
 def run():
-    server = CaptureServer()
+    server = LspTestServer()
     uri = "file:///tmp/protocol.mln"
     try:
         initialized = server.request(1, "initialize", {
@@ -189,7 +189,7 @@ def run():
     finally:
         server.stop_syntax_checker()
 
-    color_server = CaptureServer()
+    color_server = LspTestServer()
     color_uri = "file:///tmp/color-first.mln"
     try:
         color_server.handle({

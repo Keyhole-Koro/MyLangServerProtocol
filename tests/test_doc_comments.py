@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Documentation extraction and frontend metadata tests."""
 
-from feature_test_support import fixture_text, run_with_server, snapshot
+from lsp_testkit import fixture_text, run_with_server, snapshot
 
 
 SOURCE = fixture_text("doc-comments.mln")

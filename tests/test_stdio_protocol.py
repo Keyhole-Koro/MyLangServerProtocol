@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from feature_test_support import fixture_text, position
+from lsp_testkit import fixture_text, position
 
 
 SERVER_DIR = Path(__file__).resolve().parents[1]

@@ -4,8 +4,8 @@
 import tempfile
 from pathlib import Path
 
-from feature_test_support import (
-    CaptureServer,
+from lsp_testkit import (
+    LspTestServer,
     fixture_text,
     position,
     run_with_server,
@@ -45,7 +45,7 @@ def test(server):
 
 
 def test_protocol():
-    server = CaptureServer()
+    server = LspTestServer()
     try:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
