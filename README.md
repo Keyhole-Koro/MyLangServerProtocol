@@ -48,6 +48,10 @@ The server speaks JSON-RPC 2.0 over stdio.
 - `src/mylang_lsp/features/`: semantic tokens, diagnostics, and document
   symbols
 - `src/mylang_lsp/frontend/`: native syntax-checker process and result cache
+- `tests/support/`: fixture, temporary-workspace, and in-memory LSP test tools
+- `tests/fixtures/`: MyLang and MLX source fixtures grouped by feature
+- `tests/frontend/`, `tests/interaction/`, `tests/navigation/`, and
+  `tests/protocol/`: feature-oriented test modules
 
 The package can also be launched directly with:
 
@@ -58,5 +62,5 @@ PYTHONPATH=src python3 -m mylang_lsp
 ## Tests
 
 ```bash
-for test_file in tests/test_*.py; do python3 "$test_file" || exit 1; done
+python3 -m tests.run
 ```

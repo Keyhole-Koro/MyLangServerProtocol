@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 """Protocol capability and interactive request integration tests."""
 
-import tempfile
-from pathlib import Path
-
-from lsp_testkit import LspTestServer, fixture_text, position
+from tests.support.lsp import FixtureWorkspace, LspTestServer, fixture_text, position
 
 
 SOURCE = fixture_text("protocol/basic.mln")
@@ -77,30 +74,15 @@ def run():
         assert server.get_doc(uri).version == 2
         assert server.get_doc(uri).text == changed
 
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            library_path = root / "library.mln"
-            unused_path = root / "unused.mln"
-            caller_path = root / "caller.mln"
-            library_path.write_text(fixture_text("protocol/library.mln"), encoding="utf-8")
-            unused_path.write_text(fixture_text("protocol/unused.mln"), encoding="utf-8")
-            caller_source = fixture_text("protocol/caller.mln")
-            caller_path.write_text(caller_source, encoding="utf-8")
-            caller_uri = caller_path.as_uri()
-            library_uri = library_path.as_uri()
-            unused_uri = unused_path.as_uri()
-            server.handle({
-                "jsonrpc": "2.0",
-                "method": "textDocument/didOpen",
-                "params": {
-                    "textDocument": {
-                        "uri": caller_uri,
-                        "languageId": "mylang",
-                        "version": 1,
-                        "text": caller_source,
-                    }
-                },
-            })
+        with FixtureWorkspace() as workspace:
+            library = workspace.materialize("protocol/library.mln")
+            unused = workspace.materialize("protocol/unused.mln")
+            caller = workspace.materialize("protocol/caller.mln")
+            caller_uri = caller.uri
+            library_uri = library.uri
+            unused_uri = unused.uri
+            caller_source = caller.source
+            server.open_document(caller_uri, caller_source)
             # didOpen indexes only the current file. Dependencies are kept lazy
             # so unrelated import graphs cannot block interactive requests.
             assert server.workspace_index.get(library_uri) is None

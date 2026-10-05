@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Signature Help call-context and active-parameter tests."""
 
-from lsp_testkit import fixture_text, position, run_with_server, snapshot
+from tests.support.lsp import fixture_text, position, run_with_server, snapshot
 
 
 SOURCE = fixture_text("signature/basic.mln")

@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 """Definition targets must follow scopes, receiver types and lazy imports."""
 
-import tempfile
-from pathlib import Path
-
-from lsp_testkit import LspTestServer, fixture_text, position, snapshot
+from tests.support.lsp import FixtureWorkspace, LspTestServer, fixture_text, position, snapshot
 
 
 def target(server, source, use, declaration, name, occurrence=0, use_after=1):
@@ -45,16 +42,10 @@ def test_local(server):
 
 
 def test_imports():
-    with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
-        library = root / "library.mln"
-        source = fixture_text("definition-resolution/library.mln")
-        library.write_text(source)
-        unused = root / "unused.mln"
-        unused.write_text(fixture_text("definition-resolution/unused.mln"))
-        caller = root / "caller.mln"
-        text = fixture_text("definition-resolution/caller.mln")
-        caller.write_text(text)
+    with FixtureWorkspace() as workspace:
+        library = workspace.materialize("definition-resolution/library.mln")
+        unused = workspace.materialize("definition-resolution/unused.mln")
+        caller = workspace.materialize("definition-resolution/caller.mln")
         # Each request starts cold; success must not depend on earlier hovers.
         cases = [("get", 1, "get()"), ("get", 2, "get()"),
                  ("get", 3, "get()"), ("Counter", 0, "Counter {"),
@@ -63,28 +54,23 @@ def test_imports():
         for needle, occurrence, declaration in cases:
             server = LspTestServer()
             try:
-                server.document_store.update(caller.as_uri(), text, 1)
-                server.handle({"id": 1, "method": "textDocument/definition", "params": {
-                    "textDocument": {"uri": caller.as_uri()},
-                    "position": position(text, needle, occurrence, 1)}})
-                result = server.messages[-1]["result"]
+                server.document_store.update(caller.uri, caller.source, 1)
+                result = server.request(1, "textDocument/definition", {
+                    "textDocument": {"uri": caller.uri},
+                    "position": position(caller.source, needle, occurrence, 1),
+                })["result"]
                 assert isinstance(result, dict), (needle, occurrence, result)
-                assert result["uri"] == library.as_uri(), (needle, occurrence, result)
-                assert result["range"]["start"] == position(source, declaration)
-                assert server.workspace_index.get(unused.as_uri()) is None
+                assert result["uri"] == library.uri, (needle, occurrence, result)
+                assert result["range"]["start"] == position(library.source, declaration)
+                assert server.workspace_index.get(unused.uri) is None
             finally:
                 server.stop_syntax_checker()
 
 
 def test_builtin_string_methods():
-    with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
-        library = root / "str.mln"
-        source = fixture_text("definition-resolution/str.mln")
-        library.write_text(source)
-        caller = root / "caller.mln"
-        text = fixture_text("definition-resolution/str-caller.mln")
-        caller.write_text(text)
+    with FixtureWorkspace() as workspace:
+        library = workspace.materialize("definition-resolution/str.mln")
+        caller = workspace.materialize("definition-resolution/str-caller.mln", "caller.mln")
         cases = [
             ("len", 0, "len()"),
             ("len", 1, "len()"),
@@ -98,14 +84,14 @@ def test_builtin_string_methods():
         for needle, occurrence, declaration in cases:
             server = LspTestServer()
             try:
-                server.document_store.update(caller.as_uri(), text, 1)
-                server.handle({"id": 1, "method": "textDocument/definition", "params": {
-                    "textDocument": {"uri": caller.as_uri()},
-                    "position": position(text, needle, occurrence, 1)}})
-                result = server.messages[-1]["result"]
+                server.document_store.update(caller.uri, caller.source, 1)
+                result = server.request(1, "textDocument/definition", {
+                    "textDocument": {"uri": caller.uri},
+                    "position": position(caller.source, needle, occurrence, 1),
+                })["result"]
                 assert isinstance(result, dict), (needle, occurrence, result)
-                assert result["uri"] == library.as_uri()
-                assert result["range"]["start"] == position(source, declaration)
+                assert result["uri"] == library.uri
+                assert result["range"]["start"] == position(library.source, declaration)
             finally:
                 server.stop_syntax_checker()
 

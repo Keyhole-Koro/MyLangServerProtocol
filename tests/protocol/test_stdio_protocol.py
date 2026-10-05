@@ -7,10 +7,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from lsp_testkit import fixture_text, position
+from tests.support.lsp import fixture_text, position
 
 
-SERVER_DIR = Path(__file__).resolve().parents[1]
+SERVER_DIR = Path(__file__).resolve().parents[2]
 SOURCE = fixture_text("protocol/basic.mln")
 
 

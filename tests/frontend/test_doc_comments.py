@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Documentation extraction and frontend metadata tests."""
 
-from lsp_testkit import fixture_text, run_with_server, snapshot
+from tests.support.lsp import fixture_text, run_with_server, snapshot
 
 
-SOURCE = fixture_text("doc-comments.mln")
+SOURCE = fixture_text("docs/comments.mln")
 
 
 def test(server):

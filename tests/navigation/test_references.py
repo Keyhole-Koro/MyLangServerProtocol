@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """Definition and reference resolution for function-pointer uses."""
 
-import tempfile
-from pathlib import Path
-
-from lsp_testkit import (
+from tests.support.lsp import (
+    FixtureWorkspace,
     LspTestServer,
     fixture_text,
     position,
@@ -47,31 +45,26 @@ def test(server):
 def test_protocol():
     server = LspTestServer()
     try:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            library = root / "library.mln"
-            caller = root / "caller.mln"
-            library_source = fixture_text("references/library.mln")
-            library.write_text(library_source, encoding="utf-8")
-            caller_source = fixture_text("references/caller.mln")
-            caller.write_text(caller_source, encoding="utf-8")
+        with FixtureWorkspace() as workspace:
+            library = workspace.materialize("references/library.mln")
+            caller = workspace.materialize("references/caller.mln")
             initialized = server.request(1, "initialize", {
-                "workspaceFolders": [{"uri": root.as_uri(), "name": "test"}],
+                "workspaceFolders": [{"uri": workspace.root.as_uri(), "name": "test"}],
                 "initializationOptions": {"semanticTokens": False},
             })
             capabilities = initialized["result"]["capabilities"]
             assert capabilities["referencesProvider"] is True
 
-            server.open_document(library.as_uri(), library_source)
+            server.open_document(library.uri, library.source)
             result = server.request(2, "textDocument/references", {
-                "textDocument": {"uri": library.as_uri()},
-                "position": position(library_source, "callback", after=1),
+                "textDocument": {"uri": library.uri},
+                "position": position(library.source, "callback", after=1),
                 "context": {"includeDeclaration": False},
             })["result"]
             assert len(result) == 1
-            assert result[0]["uri"] == caller.as_uri()
+            assert result[0]["uri"] == caller.uri
             assert result[0]["range"]["start"] == position(
-                caller_source, "callback"
+                caller.source, "callback"
             )
     finally:
         server.stop_syntax_checker()

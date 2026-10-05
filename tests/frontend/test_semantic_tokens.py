@@ -14,9 +14,9 @@ the toolchain cannot be built/started.
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import server as srv  # noqa: E402
-from lsp_testkit import fixture_text  # noqa: E402
+from tests.support.lsp import fixture_text  # noqa: E402
 
 INV = {i: name for name, i in srv.TOKEN_TYPE_INDEX.items()}
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Versioned document and UTF-8/UTF-16 position model tests."""
 
-from lsp_testkit import LspServer, fixture_text, snapshot
+from tests.support.lsp import LspServer, fixture_text, snapshot
 from lsp_analysis import DocumentStore
 from server import TOKEN_TYPE_INDEX
 

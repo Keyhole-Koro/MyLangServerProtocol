@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from lsp_analysis import DocumentSnapshot  # noqa: E402
 from server import LspServer  # noqa: E402
 
 
-FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures"
+FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "fixtures"
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,45 @@ class Fixture:
 
     def position(self, needle: str, occurrence: int = 0, after: int = 0) -> dict:
         return position(self.source, needle, occurrence, after)
+
+
+@dataclass(frozen=True)
+class WorkspaceDocument:
+    """A fixture materialized at a real path for import-resolution tests."""
+
+    path: Path
+    source: str
+
+    @property
+    def uri(self) -> str:
+        return self.path.as_uri()
+
+
+class FixtureWorkspace:
+    """Temporary workspace populated from named source fixtures."""
+
+    def __init__(self) -> None:
+        self._temporary: Optional[tempfile.TemporaryDirectory] = None
+        self.root: Optional[Path] = None
+
+    def __enter__(self) -> "FixtureWorkspace":
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        return self
+
+    def __exit__(self, *_unused) -> None:
+        assert self._temporary is not None
+        self._temporary.cleanup()
+        self._temporary = None
+        self.root = None
+
+    def materialize(self, fixture_name: str, relative_path: Optional[str] = None) -> WorkspaceDocument:
+        assert self.root is not None, "FixtureWorkspace must be used in a with block"
+        path = self.root / (relative_path or Path(fixture_name).name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        source = fixture_text(fixture_name)
+        path.write_text(source, encoding="utf-8")
+        return WorkspaceDocument(path, source)
 
 
 def fixture(name: str) -> Fixture:

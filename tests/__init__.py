@@ -1,0 +1,1 @@
+"""MyLang LSP test suite."""
