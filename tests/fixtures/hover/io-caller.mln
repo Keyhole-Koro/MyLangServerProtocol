@@ -1,0 +1,3 @@
+package app;
+import io;
+i32 main() { io.write(1); return 0; }

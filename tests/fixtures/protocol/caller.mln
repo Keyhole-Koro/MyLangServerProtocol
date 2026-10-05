@@ -1,0 +1,4 @@
+package caller;
+import { inc, Status, Item } from "library.mln";
+import unused from "unused.mln";
+i32 main() { Item item; Status status = Status::READY; return inc(1); }

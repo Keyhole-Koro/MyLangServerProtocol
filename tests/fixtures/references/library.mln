@@ -1,0 +1,2 @@
+package library;
+export i32 callback(i32 value) { return value; }

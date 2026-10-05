@@ -1,0 +1,2 @@
+i32 add(i32 a, i32 b) { return a; }
+i32 main() { return add(1, 

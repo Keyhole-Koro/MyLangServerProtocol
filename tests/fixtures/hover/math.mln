@@ -1,0 +1,4 @@
+package math;
+/// Imported add.
+/// @param value Input.
+export i32 inc(i32 value) { return value + 1; }

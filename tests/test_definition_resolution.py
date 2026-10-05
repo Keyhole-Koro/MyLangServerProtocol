@@ -4,8 +4,7 @@
 import tempfile
 from pathlib import Path
 
-from feature_test_support import position, snapshot
-from test_references import CaptureServer
+from feature_test_support import CaptureServer, fixture_text, position, snapshot
 
 
 def target(server, source, use, declaration, name, occurrence=0, use_after=1):
@@ -17,61 +16,26 @@ def target(server, source, use, declaration, name, occurrence=0, use_after=1):
 
 
 def test_local(server):
-    source = """struct A { i32 x; };
-struct B { i32 x; };
-struct Holder { A value; };
-i32 (ref A a) get() { return a.x; }
-i32 (ref B b) get() { return b.x; }
-A make() { A a; return a; }
-i32 main() {
-    A a;
-    a.get();
-    i32 unrelated = 1;
-    a.get();
-    { B a; a.get(); }
-    a.get();
-    Holder holder;
-    holder.value.get();
-    A array[2];
-    array[0].get();
-    return make().get();
-}
-"""
+    source = fixture_text("definition-resolution/receivers.mln")
     # An unrelated declaration or an inner shadow must not change a's type.
     for occurrence in [2, 3, 5, 6, 7, 8]:
         target(server, source, "get", "get() { return a", "receivers.mln", occurrence)
     target(server, source, "get", "get() { return b", "receivers.mln", 4)
 
-    generic = """struct Box<T> { T value; };
-struct Bag<T> { T value; };
-struct A { i32 x; };
-i32 (ref A a) get() { return a.x; }
-U (ref Box<U> box) take() { return box.value; }
-U (ref Bag<U> bag) take() { return bag.value; }
-i32 main() { Box<A> box; return box.take().get(); }
-"""
+    generic = fixture_text("definition-resolution/generic-chain.mln")
     target(server, generic, "take", "take() { return box", "generic-chain.mln", 2)
     target(server, generic, "get", "get() { return a", "generic-chain.mln", 1)
 
-    const_generic = """struct InlineString<const N> { u8 data[N]; i32 length; };
-i32 (ref InlineString<N> text) len() { return text.length; }
-i32 main() { InlineString<32> text; return text.len(); }
-"""
+    const_generic = fixture_text("definition-resolution/const-generic.mln")
     target(server, const_generic, "InlineString", "InlineString<const", "const-generic.mln", 2)
     target(server, const_generic, "len", "len() { return", "const-generic.mln", 1)
     target(server, const_generic, "N", "N> {", "const-generic.mln", 1, 0)
 
-    variants = """enum Result<T,E> { Ok(T), Err(E) };
-enum Other { Ok(i32), Err(i32) };
-i32 main() { Result<i32,i32> r = Result<i32,i32>::Ok(1); Other o = Other::Ok(2); return 0; }
-"""
+    variants = fixture_text("definition-resolution/variants.mln")
     target(server, variants, "Ok", "Ok(T)", "variants.mln", 2)
     target(server, variants, "Ok", "Ok(i32)", "variants.mln", 3)
 
-    shadow = """i32 handle(i32 x) { return x; }
-i32 other(i32 handle) { return handle; }
-i32 main() { { i32 handle = 7; handle; } return handle(1); }
-"""
+    shadow = fixture_text("definition-resolution/shadow.mln")
     doc = snapshot(shadow, "shadow-resolution.mln")
     for occurrence in [1, 2, 3, 4]:
         assert server.language_features.definition(doc, position(shadow, "handle", occurrence, 1)) is None
@@ -84,30 +48,12 @@ def test_imports():
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         library = root / "library.mln"
-        source = """package library;
-export struct Counter { i32 x; };
-export i32 (ref Counter c) get() { return c.x; }
-export Counter *(Counter *c) me() { return c; }
-export Counter make() { Counter c; return c; }
-export enum Result<T,E> { Ok(T), Err(E) };
-"""
+        source = fixture_text("definition-resolution/library.mln")
         library.write_text(source)
         unused = root / "unused.mln"
-        unused.write_text("export i32 unrelated() { return 0; }\n")
+        unused.write_text(fixture_text("definition-resolution/unused.mln"))
         caller = root / "caller.mln"
-        text = """import lib from "library.mln";
-import { Counter, Result } from "library.mln";
-import unused from "unused.mln";
-struct Other { i32 x; };
-i32 (ref Other o) get() { return o.x; }
-i32 main() {
-    Counter c; Counter *p = &c;
-    c.get();
-    p->me()->get();
-    Result<i32,i32> r = Result<i32,i32>::Ok(1);
-    return lib.make().get();
-}
-"""
+        text = fixture_text("definition-resolution/caller.mln")
         caller.write_text(text)
         # Each request starts cold; success must not depend on earlier hovers.
         cases = [("get", 1, "get()"), ("get", 2, "get()"),
@@ -134,26 +80,10 @@ def test_builtin_string_methods():
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         library = root / "str.mln"
-        source = """package str;
-export struct InlineString<const N> { u8 data[N]; i32 length; };
-export i32 (str self) len() { return self.length; }
-export str (char* self) as_str() { return str { data: self, length: 0 }; }
-export str (ref InlineString<N> self) as_str() { return str { data: (char*)(&self.data[0]), length: self.length }; }
-export InlineString<12> (i32 self) to_string() { return InlineString<12> {}; }
-"""
+        source = fixture_text("definition-resolution/str.mln")
         library.write_text(source)
         caller = root / "caller.mln"
-        text = """import str from "str.mln";
-import { InlineString } from "str.mln";
-i32 main() {
-    str value = "hello";
-    char* legacy = "old";
-    if ("x".len() != value.len()) { return 1; }
-    if (legacy.as_str().len() != 3) { return 2; }
-    InlineString<12> digits = 42.to_string();
-    return digits.as_str().len();
-}
-"""
+        text = fixture_text("definition-resolution/str-caller.mln")
         caller.write_text(text)
         cases = [
             ("len", 0, "len()"),

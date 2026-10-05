@@ -1,0 +1,2 @@
+struct Vec<T> { T *data; };
+T first<T>(Vec<T> *values) { return values->data[0]; }

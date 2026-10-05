@@ -4,41 +4,20 @@
 import tempfile
 from pathlib import Path
 
-from feature_test_support import LspServer, position
+from feature_test_support import CaptureServer, fixture_text, position
 
 
-class CaptureServer(LspServer):
-    def __init__(self):
-        super().__init__()
-        self.messages = []
-
-    def send(self, payload):
-        self.messages.append(payload)
-
-
-SOURCE = """/// Adds.
-/// @param a First.
-/// @param b Second.
-i32 add(i32 a, i32 b) { return a + b; }
-i32 main() { return add(1, 2); }
-"""
-
-
-def response(server, request_id):
-    return next(message for message in reversed(server.messages) if message.get("id") == request_id)
+SOURCE = fixture_text("protocol/basic.mln")
 
 
 def run():
     server = CaptureServer()
     uri = "file:///tmp/protocol.mln"
     try:
-        server.handle({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {"initializationOptions": {"semanticTokens": False}},
+        initialized = server.request(1, "initialize", {
+            "initializationOptions": {"semanticTokens": False},
         })
-        capabilities = response(server, 1)["result"]["capabilities"]
+        capabilities = initialized["result"]["capabilities"]
         assert capabilities["positionEncoding"] == "utf-16"
         assert capabilities["hoverProvider"] is True
         assert capabilities["definitionProvider"] is True
@@ -48,56 +27,30 @@ def run():
             "textDocument/documentSymbol"
         )
 
-        server.handle({
-            "jsonrpc": "2.0",
-            "method": "textDocument/didOpen",
-            "params": {
-                "textDocument": {
-                    "uri": uri,
-                    "languageId": "mylang",
-                    "version": 1,
-                    "text": SOURCE,
-                }
-            },
-        })
+        server.open_document(uri, SOURCE)
         assert server.get_doc(uri).version == 1
         # With semantic tokens disabled, diagnostics parse immediately, while
         # documentation/index construction remains lazy until hover.
         assert len(server.syntax_result_cache) == 1
         assert server.workspace_index.get(uri) is None
 
-        server.handle({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "textDocument/hover",
-            "params": {
-                "textDocument": {"uri": uri},
-                "position": position(SOURCE, "add(1", after=1),
-            },
+        hover = server.request(2, "textDocument/hover", {
+            "textDocument": {"uri": uri},
+            "position": position(SOURCE, "add(1", after=1),
         })
-        assert response(server, 2)["result"]["contents"]["value"] == "Loading..."
+        assert hover["result"]["contents"]["value"] == "Loading..."
         assert any(message.get("method") == "mylang/hoverReady" for message in server.messages)
-        server.handle({
-            "jsonrpc": "2.0",
-            "id": 20,
-            "method": "textDocument/hover",
-            "params": {
-                "textDocument": {"uri": uri},
-                "position": position(SOURCE, "add(1", after=1),
-            },
+        hover = server.request(20, "textDocument/hover", {
+            "textDocument": {"uri": uri},
+            "position": position(SOURCE, "add(1", after=1),
         })
-        assert "add(i32 a, i32 b) -> i32" in response(server, 20)["result"]["contents"]["value"]
+        assert "add(i32 a, i32 b) -> i32" in hover["result"]["contents"]["value"]
 
-        server.handle({
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "textDocument/signatureHelp",
-            "params": {
-                "textDocument": {"uri": uri},
-                "position": position(SOURCE, "add(1, 2)", after=len("add(1, ")),
-            },
+        signature = server.request(3, "textDocument/signatureHelp", {
+            "textDocument": {"uri": uri},
+            "position": position(SOURCE, "add(1, 2)", after=len("add(1, ")),
         })
-        assert response(server, 3)["result"]["activeParameter"] == 1
+        assert signature["result"]["activeParameter"] == 1
 
         with server.cancel_lock:
             server.cancelled_requests.add(99)
@@ -110,7 +63,7 @@ def run():
                 "position": position(SOURCE, "add(1", after=1),
             },
         })
-        assert response(server, 99)["error"]["code"] == -32800
+        assert server.response(99)["error"]["code"] == -32800
 
         changed = SOURCE.replace("add(1, 2)", "add(1, 3)")
         server.handle({
@@ -129,26 +82,9 @@ def run():
             library_path = root / "library.mln"
             unused_path = root / "unused.mln"
             caller_path = root / "caller.mln"
-            library_path.write_text(
-                "package library;\n"
-                "/// Imported function.\n"
-                "export i32 inc(i32 value) { return value + 1; }\n"
-                "export enum Status { READY };\n"
-                "export struct Item { i32 value; };\n",
-                encoding="utf-8",
-            )
-            unused_path.write_text(
-                "package unused;\n"
-                "/// Must stay lazy when hovering inc.\n"
-                "export i32 untouched() { return 0; }\n",
-                encoding="utf-8",
-            )
-            caller_source = (
-                "package caller;\n"
-                'import { inc, Status, Item } from "library.mln";\n'
-                'import unused from "unused.mln";\n'
-                "i32 main() { Item item; Status status = Status::READY; return inc(1); }\n"
-            )
+            library_path.write_text(fixture_text("protocol/library.mln"), encoding="utf-8")
+            unused_path.write_text(fixture_text("protocol/unused.mln"), encoding="utf-8")
+            caller_source = fixture_text("protocol/caller.mln")
             caller_path.write_text(caller_source, encoding="utf-8")
             caller_uri = caller_path.as_uri()
             library_uri = library_path.as_uri()
@@ -178,7 +114,7 @@ def run():
                     "position": position(caller_source, "inc(1", after=1),
                 },
             })
-            assert response(server, 4)["result"]["contents"]["value"] == "Loading..."
+            assert server.response(4)["result"]["contents"]["value"] == "Loading..."
             assert server.workspace_index.get(library_uri) is not None
             assert server.workspace_index.get(unused_uri) is None
             server.handle({
@@ -190,7 +126,7 @@ def run():
                     "position": position(caller_source, "inc(1", after=1),
                 },
             })
-            assert "Imported function." in response(server, 5)["result"]["contents"]["value"]
+            assert "Imported function." in server.response(5)["result"]["contents"]["value"]
             server.handle({
                 "jsonrpc": "2.0",
                 "id": 6,
@@ -200,7 +136,7 @@ def run():
                     "position": position(caller_source, "inc(1", after=1),
                 },
             })
-            definition = response(server, 6)["result"]
+            definition = server.response(6)["result"]
             assert definition["uri"] == library_uri
             assert definition["range"]["start"] == {"line": 2, "character": 11}
             for request_id, needle, occurrence, expected in [
@@ -219,9 +155,37 @@ def run():
                         ),
                     },
                 })
-                imported_definition = response(server, request_id)["result"]
+                imported_definition = server.response(request_id)["result"]
                 assert imported_definition["uri"] == library_uri
                 assert imported_definition["range"]["start"] == expected
+
+            # A type Hover loads only the library that defines that type, just
+            # like a function Hover. Removing the indexed library makes this
+            # exercise the lazy path rather than the already-loaded result.
+            server.workspace_index.remove(library_uri)
+            server.handle({
+                "jsonrpc": "2.0",
+                "id": 21,
+                "method": "textDocument/hover",
+                "params": {
+                    "textDocument": {"uri": caller_uri},
+                    "position": position(caller_source, "Item item", after=1),
+                },
+            })
+            assert server.response(21)["result"]["contents"]["value"] == "Loading..."
+            assert server.workspace_index.get(library_uri) is not None
+            server.handle({
+                "jsonrpc": "2.0",
+                "id": 22,
+                "method": "textDocument/hover",
+                "params": {
+                    "textDocument": {"uri": caller_uri},
+                    "position": position(caller_source, "Item item", after=1),
+                },
+            })
+            item_hover = server.response(22)["result"]
+            assert "struct Item {" in item_hover["contents"]["value"]
+            assert "i32 value;" in item_hover["contents"]["value"]
     finally:
         server.stop_syntax_checker()
 

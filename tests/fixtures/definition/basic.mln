@@ -1,0 +1,12 @@
+package demo;
+enum Color { RED, GREEN };
+struct Point { i32 x; };
+typedef i32 Count;
+i32 add(i32 a, i32 b) { return a + b; }
+i32 main() {
+    char* marker = "😀";
+    Point point;
+    Color color = Color::RED;
+    Count count = add(1, 2);
+    return count;
+}

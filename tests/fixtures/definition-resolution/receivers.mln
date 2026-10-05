@@ -1,0 +1,19 @@
+struct A { i32 x; };
+struct B { i32 x; };
+struct Holder { A value; };
+i32 (ref A a) get() { return a.x; }
+i32 (ref B b) get() { return b.x; }
+A make() { A a; return a; }
+i32 main() {
+    A a;
+    a.get();
+    i32 unrelated = 1;
+    a.get();
+    { B a; a.get(); }
+    a.get();
+    Holder holder;
+    holder.value.get();
+    A array[2];
+    array[0].get();
+    return make().get();
+}

@@ -1,0 +1,7 @@
+struct Box<T> { T value; };
+struct Bag<T> { T value; };
+struct A { i32 x; };
+i32 (ref A a) get() { return a.x; }
+U (ref Box<U> box) take() { return box.value; }
+U (ref Bag<U> bag) take() { return bag.value; }
+i32 main() { Box<A> box; return box.take().get(); }

@@ -10,7 +10,7 @@ from .models import (
     Token,
     WorkspaceIndex,
 )
-from .documents import DocumentSnapshot
+from .documents import DocumentSnapshot, SourceSpan
 from .frontend import FrontendBackend
 from .resolution import ExpressionResolver, base_type, generic_base_index
 
@@ -42,6 +42,17 @@ class LanguageFeatures:
             return {
                 "contents": {"kind": "markdown", "value": self._function_markdown(function)},
                 "range": snapshot.line_map.range(span),
+            }
+
+        structure = self._struct_declaration_at(unit, token)
+        if structure is not None:
+            declaration, declaration_unit = structure
+            return {
+                "contents": {
+                    "kind": "markdown",
+                    "value": self._struct_markdown(declaration, declaration_unit),
+                },
+                "range": snapshot.line_map.range(token.span),
             }
 
         context = self._call_context(unit, offset)
@@ -384,6 +395,123 @@ class LanguageFeatures:
             and (container is None or declaration.container == container)
         ]
 
+    def _struct_declaration_at(
+        self, unit: AnalysisUnit, token: Optional[Token]
+    ) -> Optional[Tuple[DeclarationInfo, AnalysisUnit]]:
+        """Resolve a struct declaration for a declaration site or type use."""
+        if token is None or token.kind != "IDENTIFIER":
+            return None
+
+        exact = next(
+            (declaration for declaration in unit.declarations
+             if declaration.span == token.span and declaration.kind == "struct"),
+            None,
+        )
+        if exact is not None:
+            return exact, unit
+
+        local = [
+            declaration for declaration in self._matching_declarations(
+                unit, token.text, token.role, None
+            )
+            if declaration.kind == "struct"
+        ]
+        if len(local) == 1:
+            return local[0], unit
+        if local:
+            return None
+
+        package = None
+        if token.index >= 2 and unit.tokens[token.index - 1].kind == "DOT":
+            qualifier = unit.tokens[token.index - 2].text
+            if qualifier in unit.imported_packages:
+                package = qualifier
+        if token.text not in unit.imported_names and package is None:
+            return None
+
+        target_uri = unit.import_targets.get(package or token.text)
+        candidates = []
+        for candidate_unit in self.index.units():
+            if candidate_unit.snapshot.uri == unit.snapshot.uri:
+                continue
+            if target_uri is not None and candidate_unit.snapshot.uri != target_uri:
+                continue
+            if package is not None and target_uri is None and self._package_name(candidate_unit) != package:
+                continue
+            for declaration in candidate_unit.declarations:
+                if (declaration.name == token.text and declaration.kind == "struct"
+                        and declaration.is_exported):
+                    candidates.append((declaration, candidate_unit))
+        return candidates[0] if len(candidates) == 1 else None
+
+    @staticmethod
+    def _package_name(unit: AnalysisUnit) -> str:
+        for index, token in enumerate(unit.tokens[:-1]):
+            if token.kind == "PACKAGE" and unit.tokens[index + 1].kind == "IDENTIFIER":
+                return unit.tokens[index + 1].text
+        return ""
+
+    def _struct_markdown(
+        self, declaration: DeclarationInfo, unit: AnalysisUnit
+    ) -> str:
+        tokens = unit.tokens
+        name_index = next(
+            (token.index for token in tokens if token.span == declaration.span), None
+        )
+        if name_index is None:
+            return f"```mylang\nstruct {declaration.name}\n```"
+        struct_index = next(
+            (index for index in range(name_index, -1, -1)
+             if tokens[index].kind == "STRUCT"),
+            None,
+        )
+        if struct_index is None:
+            return f"```mylang\nstruct {declaration.name}\n```"
+        open_index = next(
+            (index for index in range(struct_index + 1, len(tokens))
+             if tokens[index].kind == "L_BRACE"),
+            None,
+        )
+        if open_index is None:
+            return f"```mylang\nstruct {declaration.name}\n```"
+        close_index = self.frontend._matching_close(tokens, open_index)
+        if close_index is None:
+            return f"```mylang\nstruct {declaration.name}\n```"
+
+        header = unit.snapshot.line_map.slice(
+            SourceSpan(tokens[struct_index].span.start, tokens[open_index].span.start)
+        ).strip()
+        if declaration.name not in header:
+            header = f"struct {declaration.name}"
+        fields = self._struct_fields(unit, open_index, close_index)
+        lines = [header + " {"]
+        lines.extend(f"    {field}" for field in fields)
+        lines.append("}")
+        return "```mylang\n" + "\n".join(lines) + "\n```"
+
+    def _struct_fields(
+        self, unit: AnalysisUnit, open_index: int, close_index: int
+    ) -> List[str]:
+        fields: List[str] = []
+        start = open_index + 1
+        nesting = 0
+        for index in range(start, close_index):
+            kind = unit.tokens[index].kind
+            if kind in OPEN_TO_CLOSE:
+                nesting += 1
+            elif kind in CLOSE_TO_OPEN:
+                nesting = max(0, nesting - 1)
+            elif kind == "SEMICOLON" and nesting == 0:
+                if start < index:
+                    source = unit.snapshot.line_map.slice(
+                        SourceSpan(unit.tokens[start].span.start, unit.tokens[index].span.start)
+                    )
+                    field = " ".join(source.split())
+                    if field:
+                        fields.append(field + ";")
+                start = index + 1
+        return fields
+
     def _generic_parameter_declaration(
         self, unit: AnalysisUnit, selected: Token
     ) -> Optional[Token]:
@@ -492,6 +620,9 @@ class LanguageFeatures:
         unit = self.unit(snapshot)
         offset = snapshot.line_map.lsp_to_offset(position)
         token = self._token_at(unit.tokens, offset)
+        target = self.definition_import_target_at(snapshot, position)
+        if target is not None:
+            return target
         name: Optional[str] = None
         package: Optional[str] = None
         receiver_type: Optional[str] = None

@@ -1,0 +1,3 @@
+struct Point { i32 x; i32 y; };
+struct Box<T> { T value; i32 count; };
+i32 main() { Point origin; Box<Point> points; return origin.x + points.count; }

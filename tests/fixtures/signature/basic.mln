@@ -1,0 +1,16 @@
+i32 inner(i32 a, i32 b) { return a; }
+i32 outer(i32 x, i32 y) { return x; }
+void log(rest values) {}
+struct User { i32 id; };
+void (ref User user) show(i32 value) {}
+struct Admin { i32 id; };
+void (ref Admin admin) show(char* text) {}
+i32 main() {
+    outer(inner(1, 2), 3);
+    log(1, 2, 3);
+    User user;
+    user.show(1);
+    Admin admin;
+    admin.show("ok");
+    return 0;
+}

@@ -1,0 +1,10 @@
+enum First { ITEM };
+enum Second { ITEM };
+enum Duplicate { VALUE };
+enum Duplicate { VALUE };
+i32 main() {
+    First first = First::ITEM;
+    Second second = Second::ITEM;
+    Duplicate duplicate = Duplicate::VALUE;
+    return 0;
+}

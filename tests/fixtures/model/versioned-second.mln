@@ -1,0 +1,1 @@
+i32 second() { return 2; }

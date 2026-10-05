@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Versioned document and UTF-8/UTF-16 position model tests."""
 
-from feature_test_support import LspServer, snapshot
+from feature_test_support import LspServer, fixture_text, snapshot
 from lsp_analysis import DocumentStore
 from server import TOKEN_TYPE_INDEX
 
 
 def test_line_map():
-    doc = snapshot('i32 main() { print("日本😀"); foo(); }\n', "unicode.mln")
+    doc = snapshot(fixture_text("model/unicode.mln"), "unicode.mln")
     source = doc.text
     byte_offset = source.encode("utf-8").index(b"foo")
     lsp = doc.line_map.offset_to_lsp(byte_offset)
@@ -53,8 +53,8 @@ def test_versioned_analysis_cache():
     server = LspServer()
     try:
         uri = "file:///tmp/versioned.mln"
-        first = snapshot("i32 first() { return 1; }\n", "versioned.mln", 1)
-        second = snapshot("i32 second() { return 2; }\n", "versioned.mln", 2)
+        first = snapshot(fixture_text("model/versioned-first.mln"), "versioned.mln", 1)
+        second = snapshot(fixture_text("model/versioned-second.mln"), "versioned.mln", 2)
         first_unit = server.language_features.unit(first)
         second_unit = server.language_features.unit(second)
         assert [function.name for function in first_unit.functions] == ["first"]

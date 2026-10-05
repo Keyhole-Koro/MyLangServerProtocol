@@ -1,0 +1,10 @@
+import str from "str.mln";
+import { InlineString } from "str.mln";
+i32 main() {
+    str value = "hello";
+    char* legacy = "old";
+    if ("x".len() != value.len()) { return 1; }
+    if (legacy.as_str().len() != 3) { return 2; }
+    InlineString<12> digits = 42.to_string();
+    return digits.as_str().len();
+}

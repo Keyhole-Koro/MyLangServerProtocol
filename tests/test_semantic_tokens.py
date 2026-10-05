@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import server as srv  # noqa: E402
+from feature_test_support import fixture_text  # noqa: E402
 
 INV = {i: name for name, i in srv.TOKEN_TYPE_INDEX.items()}
 
@@ -75,30 +76,25 @@ def decode_uri(server, uri, text):
 
 # (source, {text: expected_type}) — assert each text is classified as expected.
 CLASSIFY_CASES = [
-    ("i32 add(i32 a, Point b) { return a + b; }\n",
+    (fixture_text("semantic/classify-function.mln"),
      {"add": "function", "a": "parameter", "b": "parameter", "Point": "type"}),
-    ("package gfx;\n", {"gfx": "namespace"}),
-    ('import math from "m";\n', {"math": "namespace"}),
-    ("struct Point { i32 x; };\n", {"Point": "struct"}),
-    ("enum Color { RED, GREEN };\n", {"Color": "enum"}),
-    ("typedef struct { i32 x; } Vec;\n", {"Vec": "struct"}),
-    ("extern i32 puts(i32 c);\n", {"puts": "function", "c": "parameter"}),
-    ("i32 f(mut i32 a) { return a; }\n", {"a": "parameter", "f": "function"}),
-    ("i32 main() { return foo(b) + a.x; }\n",
+    (fixture_text("semantic/classify-package.mln"), {"gfx": "namespace"}),
+    (fixture_text("semantic/classify-import.mln"), {"math": "namespace"}),
+    (fixture_text("semantic/classify-struct.mln"), {"Point": "struct"}),
+    (fixture_text("semantic/classify-enum.mln"), {"Color": "enum"}),
+    (fixture_text("semantic/classify-typedef-struct.mln"), {"Vec": "struct"}),
+    (fixture_text("semantic/classify-extern.mln"), {"puts": "function", "c": "parameter"}),
+    (fixture_text("semantic/classify-mut.mln"), {"a": "parameter", "f": "function"}),
+    (fixture_text("semantic/classify-call-property.mln"),
      {"foo": "function", "x": "property", "main": "function"}),
-    ("u8 a = 0; u16 b = 1; Point p = mk();\n",
+    (fixture_text("semantic/classify-values.mln"),
      {"u8": "type", "u16": "type", "Point": "type", "mk": "function"}),
     # a method-style call stays property (no symbol resolution to call it a method).
-    ("i32 m() { return obj.bar(); }\n", {"bar": "property"}),
-    (
-        'import { Vec, vec_init } from "generics/vec.mln";\n'
-        'i32 main() { i32 storage[4]; Vec<i32> values; '
-        'vec_init<i32>(&values, &storage[0], 4); return 0; }\n',
+    (fixture_text("semantic/classify-method.mln"), {"bar": "property"}),
+    (fixture_text("semantic/classify-generics.mln"),
         {"Vec": "type", "vec_init": "function", "i32": "type"},
     ),
-    (
-        "struct Vec<T> { T *data; };\n"
-        "T first<T>(Vec<T> *values) { return values->data[0]; }\n",
+    (fixture_text("semantic/classify-generic-struct.mln"),
         {"Vec": "struct", "T": "type", "first": "function"},
     ),
 ]
@@ -106,23 +102,23 @@ CLASSIFY_CASES = [
 # Lexical mapping sweep: representative tokens for the KIND_TO_TYPE seam.
 # (source, {text: expected_type}). Guards against KIND_TO_TYPE drift.
 LEXICAL_CASES = [
-    ("i32 m() { i32 x = 0b1010; return x << 2 && 1; }\n",
+    (fixture_text("semantic/lexical-operators.mln"),
      {"i32": "type", "return": "keyword", "0b1010": "number",
       "<<": "operator", "&&": "operator"}),
-    ("char c = 'x'; char s = \"hi\";\n",
+    (fixture_text("semantic/lexical-strings.mln"),
      {"char": "type", "'x'": "string", '"hi"': "string"}),
-    ("ref i32 g(mut i32 a) { return a; }\n",
+    (fixture_text("semantic/lexical-ownership.mln"),
      {"ref": "ownershipRef", "mut": "ownershipMut"}),
-    ("i32 m() { bool t = true; return t; }\n",
+    (fixture_text("semantic/lexical-bool.mln"),
      {"bool": "type", "true": "variable"}),
-    ("u8 b = 1; u16 w = 2;\n",
+    (fixture_text("semantic/lexical-widths.mln"),
      {"u8": "type", "u16": "type"}),
 ]
 
 # (source, [literal lexemes that must each appear as an exact token slice])
 WIDTH_CASES = [
-    ("i32 x = 0xFF;\n", ["0xFF"]),
-    ('char s = "hi\\n";\n', ['"hi\\n"']),
+    (fixture_text("semantic/width-hex.mln"), ["0xFF"]),
+    (fixture_text("semantic/width-escape.mln"), ['"hi\\n"']),
 ]
 
 # documentSymbol: (source, {name: SYMBOL_KIND key}, [names that must be absent])

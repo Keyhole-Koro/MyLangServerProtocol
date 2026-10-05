@@ -1,0 +1,3 @@
+struct InlineString<const N> { u8 data[N]; i32 length; };
+i32 (ref InlineString<N> text) len() { return text.length; }
+i32 main() { InlineString<32> text; return text.len(); }

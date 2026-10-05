@@ -1,0 +1,3 @@
+package app;
+import { inc } from "math.mln";
+i32 main() { return inc(1); }

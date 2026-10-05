@@ -1,0 +1,1 @@
+typedef struct { i32 x; } Vec;

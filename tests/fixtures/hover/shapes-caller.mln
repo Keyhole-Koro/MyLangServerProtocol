@@ -1,0 +1,3 @@
+package app;
+import { Rect } from "shapes.mln";
+i32 main() { Rect bounds; return bounds.width; }

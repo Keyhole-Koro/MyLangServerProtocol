@@ -1,0 +1,1 @@
+export i32 unrelated() { return 0; }

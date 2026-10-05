@@ -1,0 +1,1 @@
+ref i32 g(mut i32 a) { return a; }

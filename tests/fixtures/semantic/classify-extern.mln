@@ -1,0 +1,1 @@
+extern i32 puts(i32 c);

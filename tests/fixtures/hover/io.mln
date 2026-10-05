@@ -1,0 +1,3 @@
+package io;
+/// Writes a value.
+export void write(i32 value) {}

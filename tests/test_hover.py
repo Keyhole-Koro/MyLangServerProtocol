@@ -1,18 +1,10 @@
 #!/usr/bin/env python3
 """Hover resolution, rendering, and UTF-16 range tests."""
 
-from feature_test_support import position, run_with_server, snapshot
+from feature_test_support import fixture_text, position, run_with_server, snapshot
 
 
-SOURCE = """/**
- * Adds values.
- * @param a First value.
- * @param b Second value.
- * @return Their sum.
- */
-i32 add(i32 a, i32 b) { return a + b; }
-i32 main() { char* label = "😀"; return add(1, 2); }
-"""
+SOURCE = fixture_text("hover/basic.mln")
 
 
 def test(server):
@@ -35,22 +27,15 @@ def test(server):
     assert "i32 b" in argument_hover["contents"]["value"]
     assert "Second value." in argument_hover["contents"]["value"]
 
-    unresolved_source = "i32 main() { return unknown(1); }\n"
+    unresolved_source = fixture_text("hover/unresolved.mln")
     unresolved = server.language_features.hover(
         snapshot(unresolved_source, "unresolved.mln"),
         position(unresolved_source, "unknown", after=1),
     )
     assert unresolved is None
 
-    library_source = """package math;
-/// Imported add.
-/// @param value Input.
-export i32 inc(i32 value) { return value + 1; }
-"""
-    caller_source = """package app;
-import { inc } from "math.mln";
-i32 main() { return inc(1); }
-"""
+    library_source = fixture_text("hover/math.mln")
+    caller_source = fixture_text("hover/math-caller.mln")
     server.language_features.unit(snapshot(library_source, "math.mln"))
     caller = snapshot(caller_source, "caller.mln")
     imported = server.language_features.hover(
@@ -60,14 +45,8 @@ i32 main() { return inc(1); }
     assert imported is not None
     assert "Imported add." in imported["contents"]["value"]
 
-    package_source = """package io;
-/// Writes a value.
-export void write(i32 value) {}
-"""
-    qualified_source = """package app;
-import io;
-i32 main() { io.write(1); return 0; }
-"""
+    package_source = fixture_text("hover/io.mln")
+    qualified_source = fixture_text("hover/io-caller.mln")
     server.language_features.unit(snapshot(package_source, "io.mln"))
     qualified_doc = snapshot(qualified_source, "qualified.mln")
     qualified = server.language_features.hover(
@@ -76,6 +55,50 @@ i32 main() { io.write(1); return 0; }
     )
     assert qualified is not None
     assert "Writes a value." in qualified["contents"]["value"]
+
+    structure_source = fixture_text("hover/structures.mln")
+    structure_doc = snapshot(structure_source, "structures.mln")
+    declared_struct = server.language_features.hover(
+        structure_doc,
+        position(structure_source, "Point {", after=1),
+    )
+    assert declared_struct is not None
+    assert declared_struct["contents"]["value"] == """```mylang
+struct Point {
+    i32 x;
+    i32 y;
+}
+```"""
+
+    referenced_struct = server.language_features.hover(
+        structure_doc,
+        position(structure_source, "Point origin", after=1),
+    )
+    assert referenced_struct is not None
+    assert referenced_struct["contents"]["value"] == declared_struct["contents"]["value"]
+
+    generic_struct = server.language_features.hover(
+        structure_doc,
+        position(structure_source, "Box<Point>", after=1),
+    )
+    assert generic_struct is not None
+    assert generic_struct["contents"]["value"] == """```mylang
+struct Box<T> {
+    T value;
+    i32 count;
+}
+```"""
+
+    structure_library = fixture_text("hover/shapes.mln")
+    structure_caller = fixture_text("hover/shapes-caller.mln")
+    server.language_features.unit(snapshot(structure_library, "shapes.mln"))
+    imported_struct = server.language_features.hover(
+        snapshot(structure_caller, "shapes-caller.mln"),
+        position(structure_caller, "Rect bounds", after=1),
+    )
+    assert imported_struct is not None
+    assert "struct Rect {" in imported_struct["contents"]["value"]
+    assert "i32 width;" in imported_struct["contents"]["value"]
 
 
 if __name__ == "__main__":

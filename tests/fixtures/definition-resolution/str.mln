@@ -1,0 +1,6 @@
+package str;
+export struct InlineString<const N> { u8 data[N]; i32 length; };
+export i32 (str self) len() { return self.length; }
+export str (char* self) as_str() { return str { data: self, length: 0 }; }
+export str (ref InlineString<N> self) as_str() { return str { data: (char*)(&self.data[0]), length: self.length }; }
+export InlineString<12> (i32 self) to_string() { return InlineString<12> {}; }

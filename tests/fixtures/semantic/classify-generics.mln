@@ -1,0 +1,2 @@
+import { Vec, vec_init } from "generics/vec.mln";
+i32 main() { i32 storage[4]; Vec<i32> values; vec_init<i32>(&values, &storage[0], 4); return 0; }

@@ -1,0 +1,3 @@
+package unused;
+/// Must stay lazy when hovering inc.
+export i32 untouched() { return 0; }

@@ -1,0 +1,1 @@
+u8 a = 0; u16 b = 1; Point p = mk();

@@ -7,16 +7,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-from feature_test_support import position
+from feature_test_support import fixture_text, position
 
 
 SERVER_DIR = Path(__file__).resolve().parents[1]
-SOURCE = """/// Adds.
-/// @param a First.
-/// @param b Second.
-i32 add(i32 a, i32 b) { return a + b; }
-i32 main() { return add(1, 2); }
-"""
+SOURCE = fixture_text("protocol/basic.mln")
 
 
 def send(process, message):

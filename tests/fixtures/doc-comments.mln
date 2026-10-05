@@ -1,0 +1,25 @@
+package math;
+/**
+ * Adds values.
+ *
+ * Signed arithmetic.
+ * @param a First value.
+ * @param b Second value.
+ * @param missing Ignored.
+ * @return Their sum.
+ */
+export i32 add<T>(mut i32 a, i32 b) { return a + b; }
+
+/** Does not attach. */
+
+void plain() {}
+
+/// Logs values.
+/// @param values Values to log.
+extern void log(rest values);
+
+struct Pair<A, B> { A first; B second; };
+void take(Pair<i32, i32> value, i32 next) {}
+
+/** One-line docs. */
+i32 one() { return 1; }

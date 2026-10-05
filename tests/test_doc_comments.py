@@ -1,35 +1,10 @@
 #!/usr/bin/env python3
 """Documentation extraction and frontend metadata tests."""
 
-from feature_test_support import run_with_server, snapshot
+from feature_test_support import fixture_text, run_with_server, snapshot
 
 
-SOURCE = """package math;
-/**
- * Adds values.
- *
- * Signed arithmetic.
- * @param a First value.
- * @param b Second value.
- * @param missing Ignored.
- * @return Their sum.
- */
-export i32 add<T>(mut i32 a, i32 b) { return a + b; }
-
-/** Does not attach. */
-
-void plain() {}
-
-/// Logs values.
-/// @param values Values to log.
-extern void log(rest values);
-
-struct Pair<A, B> { A first; B second; };
-void take(Pair<i32, i32> value, i32 next) {}
-
-/** One-line docs. */
-i32 one() { return 1; }
-"""
+SOURCE = fixture_text("doc-comments.mln")
 
 
 def test(server):

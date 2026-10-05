@@ -1,0 +1,3 @@
+package caller;
+import library from "library.mln";
+void init() { install(library.callback); }

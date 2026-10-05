@@ -1,0 +1,12 @@
+import lib from "library.mln";
+import { Counter, Result } from "library.mln";
+import unused from "unused.mln";
+struct Other { i32 x; };
+i32 (ref Other o) get() { return o.x; }
+i32 main() {
+    Counter c; Counter *p = &c;
+    c.get();
+    p->me()->get();
+    Result<i32,i32> r = Result<i32,i32>::Ok(1);
+    return lib.make().get();
+}

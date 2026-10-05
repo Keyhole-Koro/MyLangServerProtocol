@@ -8,7 +8,8 @@ A lightweight Language Server Protocol implementation for MyLang.
 - document symbols
 - `/** ... */`, `///`, `@param`, and `@return` function documentation
 - vermilion `docTag` semantic highlighting for documentation annotations
-- Hover for function declarations, resolved calls, and call arguments
+- Hover for function declarations, resolved calls, call arguments, and struct
+  declarations or type references (including imported structs)
 - Signature Help with nested-call-aware active parameter selection
 - go-to-definition for functions, methods, structs, enums, types, and enum
   members, with a target picker when more than one declaration matches

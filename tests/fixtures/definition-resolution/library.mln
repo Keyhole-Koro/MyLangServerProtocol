@@ -1,0 +1,6 @@
+package library;
+export struct Counter { i32 x; };
+export i32 (ref Counter c) get() { return c.x; }
+export Counter *(Counter *c) me() { return c; }
+export Counter make() { Counter c; return c; }
+export enum Result<T,E> { Ok(T), Err(E) };

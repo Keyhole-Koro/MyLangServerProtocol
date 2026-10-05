@@ -1,0 +1,3 @@
+i32 handle(i32 x) { return x; }
+i32 other(i32 handle) { return handle; }
+i32 main() { { i32 handle = 7; handle; } return handle(1); }
