@@ -5,7 +5,9 @@ from .models import (
     CLOSE_TO_OPEN,
     CallContext,
     DeclarationInfo,
+    FunctionDoc,
     FunctionInfo,
+    ImplInfo,
     OPEN_TO_CLOSE,
     Token,
     WorkspaceIndex,
@@ -33,7 +35,7 @@ class LanguageFeatures:
             None,
         )
         token = self._token_at(unit.tokens, offset)
-        if function is None and token is not None and token.kind == "IDENTIFIER":
+        if function is None and token is not None and token.kind in ("IDENTIFIER", "FROM"):
             if self._is_callee(unit, token.index):
                 functions = ExpressionResolver(self.frontend, self.index, unit).functions(token.index)
                 function = functions[0] if len(functions) == 1 else None
@@ -42,6 +44,17 @@ class LanguageFeatures:
             return {
                 "contents": {"kind": "markdown", "value": self._function_markdown(function)},
                 "range": snapshot.line_map.range(span),
+            }
+
+        trait = self._trait_declaration_at(unit, token)
+        if trait is not None:
+            declaration, declaration_unit = trait
+            return {
+                "contents": {
+                    "kind": "markdown",
+                    "value": self._trait_markdown(declaration, declaration_unit),
+                },
+                "range": snapshot.line_map.range(token.span),
             }
 
         structure = self._struct_declaration_at(unit, token)
@@ -169,6 +182,17 @@ class LanguageFeatures:
                     )
                     for function in functions
                 ])
+            associated = resolver.associated_type(token.index)
+            if associated is not None:
+                # `impl From<A> for B = B::Value;` has no item to point at;
+                # the impl itself is the definition.
+                impls = [impl for impl in self._visible_impls(unit)
+                         if impl.is_short and base_type(impl.self_type) == associated]
+                if impls:
+                    return self._definition_locations([
+                        DeclarationInfo(impl.trait_name, "impl", impl.uri, impl.span, impl.is_exported)
+                        for impl in impls
+                    ])
             # A failed typed call must not fall back to unrelated declarations
             # with the same spelling (including methods of other receivers).
             return None
@@ -227,6 +251,51 @@ class LanguageFeatures:
         ]
         return self._definition_locations(candidates)
 
+    def implementation(
+        self, snapshot: DocumentSnapshot, position: dict
+    ) -> Optional[dict | List[dict]]:
+        """Impls of a trait, or the impl items of a trait item."""
+        unit = self.unit(snapshot)
+        offset = snapshot.line_map.lsp_to_offset(position)
+        token = self._token_at(unit.tokens, offset)
+        if token is None:
+            return None
+
+        item = next(
+            (function for function in unit.functions
+             if function.name_span == token.span and function.in_trait is not None),
+            None,
+        )
+        if item is not None:
+            implementations = [
+                function
+                for candidate_unit in self.index.units()
+                for function in candidate_unit.functions
+                if function.name == item.name and function.impl_trait is not None
+                and base_type(function.impl_trait) == item.in_trait
+            ]
+            return self._definition_locations([
+                DeclarationInfo(function.name, function.kind, function.uri,
+                                function.name_span, function.is_exported)
+                for function in implementations
+            ])
+
+        trait = self._trait_declaration_at(unit, token)
+        if trait is not None:
+            impls = [
+                impl
+                for candidate_unit in self.index.units()
+                for impl in candidate_unit.impls
+                if impl.trait_name == trait[0].name
+            ]
+            return self._definition_locations([
+                DeclarationInfo(impl.trait_name, "impl", impl.uri, impl.span, impl.is_exported)
+                for impl in impls
+            ])
+
+        # A call already names its implementation.
+        return self.definition(snapshot, position)
+
     def references(
         self,
         snapshot: DocumentSnapshot,
@@ -271,7 +340,7 @@ class LanguageFeatures:
         unit = self.unit(snapshot)
         offset = snapshot.line_map.lsp_to_offset(position)
         token = self._token_at(unit.tokens, offset)
-        if token is None or token.kind != "IDENTIFIER":
+        if token is None or token.kind not in ("IDENTIFIER", "FROM"):
             return None
         return token.text
 
@@ -380,12 +449,12 @@ class LanguageFeatures:
         compatible = {
             "function": {"function", "method"},
             "property": {"method"},
-            "type": {"struct", "enum", "type"},
+            "type": {"struct", "enum", "type", "interface"},
             "struct": {"struct"},
             "enum": {"enum"},
             "enumMember": {"enumMember"},
             "resultVariant": {"enumMember"},
-            "importedSymbol": {"function", "struct", "enum", "type"},
+            "importedSymbol": {"function", "struct", "enum", "type", "interface"},
         }.get(role, set())
         return [
             declaration
@@ -706,7 +775,7 @@ class LanguageFeatures:
         if open_index <= 0:
             return None
         previous = open_index - 1
-        if tokens[previous].kind == "IDENTIFIER":
+        if tokens[previous].kind in ("IDENTIFIER", "FROM"):
             return previous
         if tokens[previous].kind in ("GT", "RSH"):
             depth = 1 if tokens[previous].kind == "GT" else 2
@@ -769,6 +838,15 @@ class LanguageFeatures:
 
     def _function_markdown(self, function: FunctionInfo) -> str:
         pieces = [f"```mylang\n{function.signature}\n```"]
+        if function.impl_trait is not None:
+            pieces.append(f"`impl {function.impl_trait} for {function.impl_type}`")
+        elif function.in_trait is not None:
+            pieces.append(f"`trait {function.in_trait}`")
+        doc = function.doc
+        if not doc.summary and not doc.body and function.impl_trait is not None:
+            # An impl item usually leaves its contract to the trait's doc.
+            doc = self._trait_item_doc(function) or doc
+            function = FunctionInfo(**{**function.__dict__, "doc": doc})
         summary = self._summary_markdown(function.doc)
         if summary:
             pieces.append(summary)
@@ -783,6 +861,85 @@ class LanguageFeatures:
             pieces.append("\n".join(lines))
         if function.doc.return_doc and function.return_type != "void":
             pieces.append(f"**Returns**\n\n{function.doc.return_doc}")
+        return "\n\n".join(pieces)
+
+    def _trait_item_doc(self, function: FunctionInfo) -> Optional[FunctionDoc]:
+        trait = base_type(function.impl_trait or "")
+        for candidate_unit in self.index.units():
+            for item in candidate_unit.functions:
+                if item.in_trait == trait and item.name == function.name:
+                    if item.doc.summary or item.doc.body:
+                        return item.doc
+        return None
+
+    def _visible_impls(self, unit: AnalysisUnit) -> List[ImplInfo]:
+        return [
+            impl
+            for candidate_unit in self.index.units()
+            for impl in candidate_unit.impls
+            if candidate_unit.snapshot.uri == unit.snapshot.uri or impl.is_exported
+        ]
+
+    def _trait_declaration_at(
+        self, unit: AnalysisUnit, token: Optional[Token]
+    ) -> Optional[Tuple[DeclarationInfo, AnalysisUnit]]:
+        """Resolve a trait declaration for its name, an impl header, or a bound."""
+        if token is None or token.kind != "IDENTIFIER" or token.role != "type":
+            return None
+        for candidate_unit in [unit] + [
+            item for item in self.index.units() if item.snapshot.uri != unit.snapshot.uri
+        ]:
+            local = candidate_unit.snapshot.uri == unit.snapshot.uri
+            if not local:
+                target = unit.import_targets.get(token.text)
+                if target is not None and candidate_unit.snapshot.uri != target:
+                    continue
+            for declaration in candidate_unit.declarations:
+                if (declaration.kind == "interface" and declaration.name == token.text
+                        and (local or declaration.is_exported)):
+                    return declaration, candidate_unit
+        return None
+
+    def _trait_markdown(self, declaration: DeclarationInfo, unit: AnalysisUnit) -> str:
+        tokens = unit.tokens
+        name_index = next(
+            (token.index for token in tokens if token.span == declaration.span), None
+        )
+        header = f"trait {declaration.name}"
+        doc = FunctionDoc()
+        if name_index is not None:
+            open_index = next(
+                (index for index in range(name_index, len(tokens))
+                 if tokens[index].kind == "L_BRACE"),
+                None,
+            )
+            if open_index is not None:
+                header = unit.snapshot.line_map.slice(
+                    SourceSpan(tokens[name_index - 1].span.start, tokens[open_index].span.start)
+                ).strip()
+            start = name_index - 2 if name_index >= 2 and tokens[name_index - 2].kind == "EXPORT" \
+                else name_index - 1
+            doc = self.frontend._doc_comment(unit.snapshot, tokens[max(start, 0)].line)
+        items = [
+            unit.snapshot.line_map.slice(function.declaration_span).strip() + ";"
+            for function in unit.functions
+            if function.in_trait == declaration.name
+        ]
+        lines = [header + " {"]
+        lines.extend(f"    {item}" for item in items)
+        lines.append("}")
+        pieces = ["```mylang\n" + "\n".join(lines) + "\n```"]
+        summary = self._summary_markdown(doc)
+        if summary:
+            pieces.append(summary)
+        implementations = sorted({
+            f"`impl {impl.trait_text} for {impl.self_type}`"
+            for candidate_unit in self.index.units()
+            for impl in candidate_unit.impls
+            if impl.trait_name == declaration.name
+        })
+        if implementations:
+            pieces.append("**Implementations**\n\n" + "\n".join(f"- {item}" for item in implementations))
         return "\n\n".join(pieces)
 
     def _summary_markdown(self, doc: FunctionDoc) -> str:

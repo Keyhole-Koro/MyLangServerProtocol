@@ -1,0 +1,27 @@
+import { Eq, From } from "@lib/cmp.mln";
+
+struct Point { i32 x; i32 y; };
+
+impl Eq for Point {
+    bool (Self *self) eq(Self *other) { return self->x == other->x; }
+}
+
+enum Code { A, B }
+enum Level { Low, High }
+enum Mode { Fast, Safe }
+
+impl From<Code> for Level = Level::High;
+impl From<Code> for Mode = Mode::Safe;
+
+impl From<i32> for Level {
+    Level from(i32 n) { return Level::Low; }
+}
+
+i32 main() {
+    Point a = Point { x: 1, y: 2 };
+    Point b = Point { x: 1, y: 3 };
+    bool same = a.eq(&b);
+    Level l = Level::from(3);
+    Mode m = Mode::from(Code::A);
+    return 0;
+}

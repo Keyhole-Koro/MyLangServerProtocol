@@ -1,3 +1,5 @@
+import re
+from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .models import (
@@ -6,6 +8,7 @@ from .models import (
     DeclarationInfo,
     FunctionDoc,
     FunctionInfo,
+    ImplInfo,
     OPEN_TO_CLOSE,
     ParamDoc,
     ParameterInfo,
@@ -13,6 +16,19 @@ from .models import (
 )
 from .documents import DocumentSnapshot, SourceSpan
 from .resolution import type_before
+
+
+@dataclass(frozen=True)
+class TraitRegion:
+    kind: str                 # "TRAIT" or "IMPL"
+    name: str                 # the trait's name
+    open_index: int           # body braces; -1 for `impl ... = value;`
+    close_index: int
+    impl: Optional[ImplInfo]
+
+
+def _replace_self(text: str, self_type: str) -> str:
+    return re.sub(r"\bSelf\b", self_type, text)
 
 
 class FrontendBackend:
@@ -34,8 +50,9 @@ class FrontendBackend:
             return cached
         result = self.query_frontend(snapshot.text) or {}
         tokens = self._tokens(snapshot, result.get("tokens", []))
+        regions = self._trait_regions(snapshot, tokens)
         functions, declaration_opens = self._functions(
-            snapshot, tokens, result.get("symbols", [])
+            snapshot, tokens, result.get("symbols", []), regions
         )
         imported_names, imported_packages, import_sources = self._imports(tokens)
         declarations = self._declarations(snapshot, tokens, result.get("symbols", []))
@@ -48,6 +65,7 @@ class FrontendBackend:
             imported_packages,
             import_sources,
             declarations,
+            impls=[region.impl for region in regions if region.impl is not None],
         )
         self.invalidate(snapshot.uri)
         self.cache[key] = unit
@@ -70,7 +88,7 @@ class FrontendBackend:
             key = (int(raw[0]), int(raw[1]), int(raw[2]))
             token = token_by_position.get(key)
             kind = str(raw[3])
-            if token is None or kind not in ("function", "method", "struct", "enum", "type"):
+            if token is None or kind not in ("function", "method", "struct", "enum", "type", "interface"):
                 continue
             declarations.append(DeclarationInfo(
                 token.text,
@@ -116,6 +134,74 @@ class FrontendBackend:
             if kind in ("SEMICOLON", "L_BRACE", "R_BRACE"):
                 return False
         return False
+
+    def _trait_regions(
+        self, snapshot: DocumentSnapshot, tokens: Sequence[Token]
+    ) -> List["TraitRegion"]:
+        """Find top-level `trait` and `impl` declarations and their bodies."""
+        regions: List[TraitRegion] = []
+        depth = 0
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            if token.kind == "L_BRACE":
+                depth += 1
+            elif token.kind == "R_BRACE":
+                depth = max(0, depth - 1)
+            if depth != 0 or token.kind not in ("TRAIT", "IMPL"):
+                index += 1
+                continue
+            name_index = index + 1
+            if token.kind == "IMPL" and name_index < len(tokens) and tokens[name_index].kind == "LT":
+                # `impl<T: Eq> Eq for Box<T>`: the trait follows the parameters.
+                depth = 0
+                while name_index < len(tokens):
+                    kind = tokens[name_index].kind
+                    depth += 1 if kind == "LT" else -1 if kind == "GT" else -2 if kind == "RSH" else 0
+                    name_index += 1
+                    if depth <= 0:
+                        break
+            if name_index >= len(tokens) or tokens[name_index].kind != "IDENTIFIER":
+                index += 1
+                continue
+            cursor = name_index + 1
+            while cursor < len(tokens) and tokens[cursor].kind not in (
+                "L_BRACE", "SEMICOLON", "ASSIGN", "FOR"
+            ):
+                cursor += 1
+            header_end = cursor
+            self_type = None
+            if token.kind == "IMPL" and cursor < len(tokens) and tokens[cursor].kind == "FOR":
+                type_start = cursor + 1
+                cursor = type_start
+                while cursor < len(tokens) and tokens[cursor].kind not in (
+                    "L_BRACE", "SEMICOLON", "ASSIGN"
+                ):
+                    cursor += 1
+                self_type = self._joined_source(snapshot, tokens[type_start:cursor]).strip()
+            open_index = cursor if cursor < len(tokens) and tokens[cursor].kind == "L_BRACE" else None
+            close_index = self._matching_close(tokens, open_index) if open_index is not None else None
+            impl = None
+            if token.kind == "IMPL" and self_type:
+                impl = ImplInfo(
+                    trait_name=tokens[name_index].text,
+                    trait_text=self._joined_source(snapshot, tokens[name_index:header_end]).strip(),
+                    self_type=self_type,
+                    uri=snapshot.uri,
+                    span=tokens[name_index].span,
+                    is_exported=index > 0 and tokens[index - 1].kind == "EXPORT",
+                    is_short=open_index is None,
+                )
+            regions.append(TraitRegion(
+                kind=token.kind,
+                name=tokens[name_index].text,
+                open_index=open_index if open_index is not None else -1,
+                close_index=close_index if close_index is not None else -1,
+                impl=impl,
+            ))
+            index = (close_index if close_index is not None else cursor) + 1
+            # The body's braces were skipped, so depth stays at the top level.
+        return regions
 
     def _tokens(self, snapshot: DocumentSnapshot, raw_tokens: Sequence[list]) -> List[Token]:
         tokens: List[Token] = []
@@ -184,6 +270,7 @@ class FrontendBackend:
         snapshot: DocumentSnapshot,
         tokens: List[Token],
         raw_symbols: Sequence[list],
+        regions: Sequence["TraitRegion"] = (),
     ) -> Tuple[List[FunctionInfo], set[int]]:
         symbol_positions = {
             (int(symbol[0]), int(symbol[1]), str(symbol[3]))
@@ -229,6 +316,23 @@ class FrontendBackend:
             declaration_span = SourceSpan(tokens[source_start_index].span.start, tokens[close_index].span.end)
             doc = self._doc_comment(snapshot, tokens[source_start_index].line)
             symbol_id = f"{package}:{symbol_kind}:{token.text}:{snapshot.uri}:{token.span.start}"
+            region = next(
+                (item for item in regions
+                 if item.open_index < name_index < item.close_index),
+                None,
+            )
+            impl_trait = impl_type = in_trait = None
+            is_exported = any(item.kind == "EXPORT" for item in tokens[boundary:name_index])
+            if region is not None and region.impl is not None:
+                impl_trait = region.impl.trait_text
+                impl_type = region.impl.self_type
+                is_exported = is_exported or region.impl.is_exported
+                # `Self` inside an impl is the impl's type.
+                if receiver_type is not None:
+                    receiver_type = _replace_self(receiver_type, impl_type)
+                return_type = _replace_self(return_type, impl_type)
+            elif region is not None and region.kind == "TRAIT":
+                in_trait = region.name
             functions.append(FunctionInfo(
                 symbol_id=symbol_id,
                 uri=snapshot.uri,
@@ -243,8 +347,11 @@ class FrontendBackend:
                 declaration_span=declaration_span,
                 open_paren_index=open_index,
                 close_paren_index=close_index,
-                is_exported=any(item.kind == "EXPORT" for item in tokens[boundary:name_index]),
+                is_exported=is_exported,
                 doc=doc,
+                impl_trait=impl_trait,
+                impl_type=impl_type,
+                in_trait=in_trait,
             ))
         return functions, declaration_opens
 

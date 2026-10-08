@@ -174,6 +174,7 @@ class LspServer:
         if method in {
             "textDocument/hover",
             "textDocument/definition",
+            "textDocument/implementation",
             "textDocument/references",
             "textDocument/signatureHelp",
             "textDocument/semanticTokens/full",
@@ -213,6 +214,7 @@ class LspServer:
                 "positionEncoding": "utf-16",
                 "hoverProvider": True,
                 "definitionProvider": True,
+                "implementationProvider": True,
                 "referencesProvider": True,
                 "signatureHelpProvider": {
                     "triggerCharacters": ["(", ","],
@@ -342,6 +344,22 @@ class LspServer:
                 result = self.language_features.definition(doc, position)
             self.send_response(id_value, result)
             return
+        if method == "textDocument/implementation":
+            uri = params["textDocument"]["uri"]
+            doc = self.get_doc(uri)
+            if doc is None:
+                self.send_response(id_value, None)
+                return
+            self.index_document(uri)
+            position = params.get("position", {})
+            # Impls can live in any source that names the trait.
+            name = self.language_features.identifier_at(doc, position)
+            if name is not None:
+                self.index_workspace_candidates(name)
+            for open_uri in list(self.open_documents):
+                self.index_document(open_uri)
+            self.send_response(id_value, self.language_features.implementation(doc, position))
+            return
         if method == "textDocument/references":
             uri = params["textDocument"]["uri"]
             doc = self.get_doc(uri)
@@ -450,13 +468,54 @@ class LspServer:
                 if not relative_path.endswith(".mln"):
                     continue
                 try:
-                    target_path = (importer_dir / relative_path).resolve(strict=True)
+                    target_path = self.import_path(importer_dir, relative_path).resolve(strict=True)
                 except OSError:
                     continue
                 target_uri = target_path.as_uri()
                 unit.import_targets[import_name] = target_uri
         finally:
             self.indexing_documents.remove(uri)
+
+    def import_path(self, importer_dir: Path, written: str) -> Path:
+        """Resolve an import as the compiler does: `@alias/rest` through the
+        nearest mylang.toml's [alias] table, anything else relative to the
+        importing file."""
+        if not written.startswith("@"):
+            return importer_dir / written
+        alias, _, rest = written.partition("/")
+        aliases, root = self.project_aliases(importer_dir)
+        target = aliases.get(alias)
+        if target is None or root is None:
+            return importer_dir / written
+        return root / target / rest
+
+    def project_aliases(self, directory: Path) -> tuple:
+        cache = self.__dict__.setdefault("_alias_cache", {})
+        for candidate in [directory, *directory.parents]:
+            config = candidate / "mylang.toml"
+            if config in cache:
+                return cache[config], candidate
+            if not config.is_file():
+                continue
+            aliases = {}
+            in_alias = False
+            try:
+                lines = config.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                lines = []
+            for line in lines:
+                text = line.split("#", 1)[0].strip()
+                if not text:
+                    continue
+                if text.startswith("["):
+                    in_alias = text == "[alias]"
+                    continue
+                if in_alias and "=" in text:
+                    key, value = (part.strip().strip('"') for part in text.split("=", 1))
+                    aliases[key] = value
+            cache[config] = aliases
+            return aliases, candidate
+        return {}, None
 
     def index_import(self, target_uri: str) -> None:
         """Index exactly one source import selected by an interactive request."""

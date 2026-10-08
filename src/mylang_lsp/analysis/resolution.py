@@ -124,9 +124,49 @@ class ExpressionResolver:
             return None
         return self.expression_type(name_index - 2, name_index, depth + 1)
 
+    def associated_type(self, name_index):
+        """`FsError` in `FsError::from(...)`, unless it names an enum variant."""
+        tokens = self.unit.tokens
+        if name_index < 2 or tokens[name_index - 1].kind != "COLONCOLON":
+            return None
+        qualifier = tokens[name_index - 2]
+        if qualifier.kind != "IDENTIFIER" or tokens[name_index].role in ("enumMember", "resultVariant"):
+            return None
+        return qualifier.text
+
+    def trait_items(self, trait_name, name):
+        """Item `name` of trait `trait_name`, declared here or exported."""
+        found = []
+        for unit in self.index.units():
+            local = unit.snapshot.uri == self.unit.snapshot.uri
+            for function in unit.functions:
+                if (function.name == name and function.in_trait == trait_name
+                        and (local or function.is_exported)):
+                    found.append(function)
+        return found
+
+    def associated_functions(self, type_name, name):
+        """Impl items `name` without a receiver on `type_name`, visible here."""
+        found = []
+        for unit in self.index.units():
+            local = unit.snapshot.uri == self.unit.snapshot.uri
+            for function in unit.functions:
+                if (function.name == name and function.kind == "function"
+                        and function.impl_type is not None
+                        and base_type(function.impl_type) == type_name
+                        and (local or function.is_exported)):
+                    found.append(function)
+        return found
+
     def functions(self, name_index, depth=0):
         tokens = self.unit.tokens
         token = tokens[name_index]
+        associated = self.associated_type(name_index)
+        if associated is not None:
+            target = self.unit.import_targets.get(associated)
+            if target and self.index.get(target) is None:
+                self.pending_import = target
+            return self.associated_functions(associated, token.text)
         package = self.package(name_index)
         method = name_index > 0 and tokens[name_index - 1].kind in ("DOT", "MEMBER") and package is None
         if not method and package is None and self.binding(token.text, name_index):
@@ -142,6 +182,12 @@ class ExpressionResolver:
                                          "method" if method else "function", receiver, package)
         if matches:
             return matches
+        if method and receiver_name:
+            # A `dyn Trait` value's type reads as the trait's name (no type
+            # may share it): its methods are the trait's items.
+            items = self.trait_items(receiver_name, token.text)
+            if items:
+                return items
         # Methods on compiler-known types live in ordinary imported packages
         # (not in a declaration imported under the receiver's name). Load
         # those packages lazily until the defining module is indexed.
@@ -165,7 +211,7 @@ class ExpressionResolver:
             callee = opening - 1
             if callee >= 0 and tokens[callee].kind in ("GT", "RSH"):
                 callee = generic_base_index(tokens, callee)
-            if callee >= 0 and tokens[callee].kind == "IDENTIFIER":
+            if callee >= 0 and tokens[callee].kind in ("IDENTIFIER", "FROM"):
                 functions = self.functions(callee, depth + 1)
                 if len(functions) != 1:
                     return None

@@ -1,0 +1,11 @@
+/** Equality between two values of one type. */
+export trait Eq {
+    /** True when both values are equal.
+     * @param other The value to compare with.
+     */
+    bool (Self *self) eq(Self *other);
+}
+
+export trait From<S> {
+    Self from(S source);
+}

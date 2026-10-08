@@ -20,6 +20,7 @@ ENGINE_SYMBOL_KIND = {
     "struct": "struct",
     "enum": "enum",
     "type": "struct",
+    "interface": "interface",
     "variable": "variable",
 }
 

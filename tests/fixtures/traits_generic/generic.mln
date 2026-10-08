@@ -1,0 +1,27 @@
+trait Eq {
+    bool (Self *self) eq(Self *other);
+}
+
+struct Box<T> { T value; };
+
+impl<T: Eq> Eq for Box<T> {
+    bool (Self *self) eq(Box<T> *other) { return self->value == other->value; }
+}
+
+trait Shape {
+    i32 (Self *self) area();
+    i32 (Self *self) doubled() { return self.area() * 2; }
+}
+
+struct Square { i32 side; };
+
+impl Shape for Square {
+    i32 (Square *self) area() { return self->side * self->side; }
+}
+
+i32 main() {
+    Square sq = Square { side: 2 };
+    dyn Shape s = &sq;
+    i32 a = s.area();
+    return a + s.doubled();
+}

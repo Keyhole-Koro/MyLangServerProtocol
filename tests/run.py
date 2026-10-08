@@ -16,6 +16,8 @@ MODULES = (
     "tests.navigation.test_definition",
     "tests.navigation.test_definition_resolution",
     "tests.navigation.test_references",
+    "tests.navigation.test_traits",
+    "tests.navigation.test_traits_generic",
     "tests.protocol.test_lsp_protocol",
     "tests.protocol.test_stdio_protocol",
 )

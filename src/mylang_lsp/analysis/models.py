@@ -57,6 +57,27 @@ class FunctionInfo:
     close_paren_index: int
     is_exported: bool
     doc: FunctionDoc
+    # Set for an item of `impl Trait for Type { ... }`: the trait as written
+    # (`From<SsdError>`) and the impl's type. `Self` in the receiver and return
+    # type has already been replaced by impl_type.
+    impl_trait: Optional[str] = None
+    impl_type: Optional[str] = None
+    # Set for a prototype inside `trait Name { ... }`; such an item is a
+    # contract, never a call target.
+    in_trait: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ImplInfo:
+    """`impl Trait<Args> for Type`, located by its trait name token."""
+
+    trait_name: str
+    trait_text: str
+    self_type: str
+    uri: str
+    span: SourceSpan
+    is_exported: bool
+    is_short: bool
 
 
 @dataclass(frozen=True)
@@ -91,6 +112,7 @@ class AnalysisUnit:
     import_sources: Dict[str, str]
     declarations: List[DeclarationInfo]
     import_targets: Dict[str, str] = field(default_factory=dict)
+    impls: List[ImplInfo] = field(default_factory=list)
 
 
 class WorkspaceIndex:
@@ -141,7 +163,7 @@ class WorkspaceIndex:
         receiver_name = base_type(receiver_type) if receiver_type else None
 
         def matches(function: FunctionInfo) -> bool:
-            if function.name != name:
+            if function.name != name or function.in_trait is not None:
                 return False
             if kind is not None and function.kind != kind:
                 return False
