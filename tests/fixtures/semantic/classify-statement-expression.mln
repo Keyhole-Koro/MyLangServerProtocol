@@ -1,0 +1,15 @@
+struct Item { i32 field; };
+enum Slot { File(Item), Unused }
+
+i32 update(Slot slot, i32 new_size) {
+    case slot of {
+        File(outer) -> ({
+            case slot of {
+                File(inner) -> ({ inner.field = new_size; });
+                Unused -> _;
+            };
+            return outer.field;
+        });
+        Unused -> 0;
+    };
+}

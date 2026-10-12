@@ -11,17 +11,19 @@ TOKEN_TYPES = [
     "comment", "docTag", "string", "keyword", "operator", "ownershipRef",
     "ownershipMut", "namespace", "number", "type", "struct", "function",
     "method", "parameter", "variable", "property", "enum", "enumMember",
-    "result", "resultVariant",
+    "result", "resultVariant", "decorator",
 ]
 TOKEN_MODIFIERS: List[str] = []
 TOKEN_TYPE_INDEX = {name: index for index, name in enumerate(TOKEN_TYPES)}
 
 
 # Lexical token kind (as emitted by tokenkind2str in the C lexer) -> LSP type.
+# IDENTIFIER and boolean literals intentionally stay on the TextMate layer
+# until the frontend assigns a semantic role. Otherwise one temporary parse
+# error turns every unclassified name into a variable-colored token.
 KIND_TO_TYPE = {
     "NUMBER": "number",
     "STRING_LITERAL": "string", "CHAR_LITERAL": "string",
-    "TRUE_LITERAL": "variable", "FALSE_LITERAL": "variable",
     "BOOL": "type", "U8": "type", "U16": "type", "I32": "type",
     "U32": "type", "CHAR": "type", "FLOAT": "type", "DOUBLE": "type",
     "VOID": "type", "LONG": "type", "SHORT": "type",
@@ -44,7 +46,7 @@ KIND_TO_TYPE = {
     "OF": "keyword", "TYPEDEF": "keyword", "STRUCT": "keyword",
     "UNION": "keyword", "ENUM": "keyword", "IMPORT": "keyword",
     "FROM": "keyword", "REST": "keyword", "EXPORT": "keyword",
-    "PACKAGE": "keyword", "TEST": "keyword", "IDENTIFIER": "variable",
+    "PACKAGE": "keyword", "TEST": "keyword",
 }
 
 

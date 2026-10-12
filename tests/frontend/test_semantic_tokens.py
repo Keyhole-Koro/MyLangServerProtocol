@@ -21,7 +21,11 @@ from tests.support.lsp import fixture_text  # noqa: E402
 INV = {i: name for name, i in srv.TOKEN_TYPE_INDEX.items()}
 
 # Roles the C engine (role_name in syntax_check.c) can attach to a token.
-ENGINE_ROLES = {"function", "type", "struct", "namespace", "parameter", "property"}
+ENGINE_ROLES = {
+    "decorator", "enum", "enumMember", "function", "keyword", "method",
+    "namespace", "parameter", "property", "result", "resultVariant", "struct",
+    "type", "variable",
+}
 
 
 def decode(server, text):
@@ -97,6 +101,12 @@ CLASSIFY_CASES = [
     (fixture_text("semantic/classify-generic-struct.mln"),
         {"Vec": "struct", "T": "type", "first": "function"},
     ),
+    (fixture_text("semantic/classify-decorator-empty-struct.mln"),
+        {"app": "decorator", "single": "property", "name": "property", "App": "struct"},
+    ),
+    (fixture_text("semantic/classify-statement-expression.mln"),
+        {"outer": "variable", "inner": "variable", "field": "property"},
+    ),
 ]
 
 # Lexical mapping sweep: representative tokens for the KIND_TO_TYPE seam.
@@ -110,7 +120,7 @@ LEXICAL_CASES = [
     (fixture_text("semantic/lexical-ownership.mln"),
      {"ref": "ownershipRef", "mut": "ownershipMut"}),
     (fixture_text("semantic/lexical-bool.mln"),
-     {"bool": "type", "true": "variable"}),
+     {"bool": "type"}),
     (fixture_text("semantic/lexical-widths.mln"),
      {"u8": "type", "u16": "type"}),
 ]
@@ -162,6 +172,10 @@ def run():
         check(ttype in srv.TOKEN_TYPE_INDEX, f"seam: KIND_TO_TYPE[{kind}]={ttype!r} not a token type")
     for role in ENGINE_ROLES:
         check(role in srv.TOKEN_TYPE_INDEX, f"seam: engine role {role!r} not a token type")
+    check("IDENTIFIER" not in srv.KIND_TO_TYPE,
+          "fallback: unclassified identifiers must remain on the TextMate layer")
+    check("TRUE_LITERAL" not in srv.KIND_TO_TYPE and "FALSE_LITERAL" not in srv.KIND_TO_TYPE,
+          "fallback: boolean literals must retain their TextMate constant color")
 
     server = srv.LspServer()
     if not server.start_syntax_checker():
@@ -244,9 +258,14 @@ def run():
         # graceful degradation: a syntax error mid-document must not wipe out the
         # lexical layer before it (B's accepted tradeoff).
         broken = "i32 add(i32 a){ return; @@@ broken\nPoint p = mk(\n"
-        types = {t for *_x, t, _s in decode(server, broken)}
+        broken_decoded = decode(server, broken)
+        types = {t for *_x, t, _s in broken_decoded}
         check({"type", "operator", "keyword"} <= types,
               f"degradation: broken input lost its lexical layer; types={types!r}")
+        broken_roles = roles_in(broken_decoded)
+        check("variable" not in broken_roles.get("broken", set()),
+              f"degradation: unclassified identifier fell back to variable; "
+              f"roles={broken_roles.get('broken')!r}")
 
         # .mlx documents are validated through MyDOMTranspiler and get JSX-like token
         # highlighting without feeding raw <Window> syntax to the MyLang grammar.

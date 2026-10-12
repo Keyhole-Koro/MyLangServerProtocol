@@ -1,0 +1,1 @@
+@app(single, name = "Demo") struct App {};
