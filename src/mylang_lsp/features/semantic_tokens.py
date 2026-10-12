@@ -85,16 +85,6 @@ class SemanticTokenService:
                 if utf16_length:
                     engine[(line_no, utf16_column_value)] = (utf16_length, "type")
 
-            # `dyn Trait`: the lexer has no `dyn` keyword; before a trait
-            # name the identifier is one.
-            entries = result.get("tokens", [])
-            for current, following in zip(entries, entries[1:]):
-                line_no, column, length, kind = current[0], current[1], current[2], current[3]
-                if (kind == "IDENTIFIER" and following[3] == "IDENTIFIER" and length == 3
-                        and 0 <= line_no < len(lines) and lines[line_no][column:column + 3] == "dyn"):
-                    start = line_map.offset_to_lsp(line_map.native_offset(line_no, column))
-                    engine[(line_no, start["character"])] = (3, "keyword")
-
         merged = dict(base)
         merged.update(engine)
         merged.update(self.comment_tokens(lines, protected))

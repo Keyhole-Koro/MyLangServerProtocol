@@ -18,9 +18,8 @@ A lightweight Language Server Protocol implementation for MyLang.
   impl's type, `Type::from(...)` reaches associated functions), Hover on a
   trait shows its items, doc, and known impls, an impl item without its own
   doc shows the trait item's, and go-to-implementation lists a trait's impls
-  or a trait item's impl items; generic impls (`impl<T: Eq> Eq for Box<T>`),
-  default items, and methods called on a `dyn Trait` value (which reach the
-  trait's item) are covered too
+  or a trait item's impl items; generic impls (`impl<T: Eq> Eq for Box<T>`)
+  and default items are covered too
 - local and relative-import function documentation lookup
 - generic declarations (including `const N` capacity parameters),
   instantiations, and named-imported templates are

@@ -21,7 +21,6 @@ impl Shape for Square {
 
 i32 main() {
     Square sq = Square { side: 2 };
-    dyn Shape s = &sq;
-    i32 a = s.area();
-    return a + s.doubled();
+    i32 a = sq.area();
+    return a + sq.doubled();
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generic impls, default items, and dyn values in navigation and hover."""
+"""Generic impls and default items in navigation and hover."""
 
 import shutil
 import tempfile
@@ -24,12 +24,8 @@ def test(server):
                 "position": position(source, needle, occurrence, after),
             })["result"]
 
-        # A method called on a dyn value is the trait's item.
-        target = request("textDocument/definition", "area();\n    return")
-        assert isinstance(target, dict), target
-        assert target["range"]["start"] == position(source, "area();")
-
-        # A default item is a definition like any other.
+        # A default item is a definition like any other: the call reaches the
+        # trait's body, which is what the impl uses.
         target = request("textDocument/definition", "doubled();")
         assert isinstance(target, dict), target
         assert target["range"]["start"] == position(source, "doubled() {")
@@ -37,7 +33,7 @@ def test(server):
         # `impl<T: Eq> Eq for Box<T>` is an impl of Eq for Box<T>.
         hover = request("textDocument/hover", "eq(Box")["contents"]["value"]
         assert "`impl Eq for Box<T>`" in hover, hover
-    print("[PASS] traits: generic impls, default items, dyn calls")
+    print("[PASS] traits: generic impls, default items")
 
 
 if __name__ == "__main__":

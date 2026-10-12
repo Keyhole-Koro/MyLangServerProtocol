@@ -134,16 +134,20 @@ class ExpressionResolver:
             return None
         return qualifier.text
 
-    def trait_items(self, trait_name, name):
-        """Item `name` of trait `trait_name`, declared here or exported."""
-        found = []
-        for unit in self.index.units():
-            local = unit.snapshot.uri == self.unit.snapshot.uri
-            for function in unit.functions:
-                if (function.name == name and function.in_trait == trait_name
-                        and (local or function.is_exported)):
-                    found.append(function)
-        return found
+    def default_items(self, type_name, name):
+        """Default items `name` of the traits `type_name` implements."""
+        traits = {
+            impl.trait_name
+            for unit in self.index.units()
+            for impl in unit.impls
+            if base_type(impl.self_type) == type_name
+        }
+        return [
+            function
+            for unit in self.index.units()
+            for function in unit.functions
+            if function.name == name and function.in_trait in traits
+        ]
 
     def associated_functions(self, type_name, name):
         """Impl items `name` without a receiver on `type_name`, visible here."""
@@ -183,11 +187,10 @@ class ExpressionResolver:
         if matches:
             return matches
         if method and receiver_name:
-            # A `dyn Trait` value's type reads as the trait's name (no type
-            # may share it): its methods are the trait's items.
-            items = self.trait_items(receiver_name, token.text)
-            if items:
-                return items
+            # An item the impl leaves out is the trait's default.
+            defaults = self.default_items(receiver_name, token.text)
+            if defaults:
+                return defaults
         # Methods on compiler-known types live in ordinary imported packages
         # (not in a declaration imported under the receiver's name). Load
         # those packages lazily until the defining module is indexed.
