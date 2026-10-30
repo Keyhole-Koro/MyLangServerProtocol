@@ -24,7 +24,7 @@ def test_local(server):
     target(server, generic, "get", "get() { return a", "generic-chain.mln", 1)
 
     const_generic = fixture_text("definition-resolution/const-generic.mln")
-    target(server, const_generic, "InlineString", "InlineString<const", "const-generic.mln", 2)
+    target(server, const_generic, "Text", "Text<const", "const-generic.mln", 2)
     target(server, const_generic, "len", "len() { return", "const-generic.mln", 1)
     target(server, const_generic, "N", "N> {", "const-generic.mln", 1, 0)
 
@@ -76,7 +76,7 @@ def test_builtin_string_methods():
             ("len", 1, "len()"),
             ("as_str", 0, "as_str()"),
             ("len", 2, "len()"),
-            ("InlineString", 0, "InlineString<const"),
+            ("Text", 0, "Text<const"),
             ("to_string", 0, "to_string()"),
             ("as_str", 1, "as_str() { return str { data: (char*)"),
             ("len", 3, "len()"),

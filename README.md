@@ -27,7 +27,7 @@ A lightweight Language Server Protocol implementation for MyLang.
 
 Generic type arguments are exposed as `type` semantic tokens. This includes
 container code such as `Vec<Node>` and calls such as `vec_init<i32>(...)`;
-numeric const arguments such as the `128` in `InlineString<128>` remain number
+numeric const arguments such as the `128` in `Text<128>` remain number
 tokens. Go-to-definition resolves a const parameter use such as `data[N]` to
 its lexical `const N` declaration.
 The server resolves relative `.mln` imports and `@alias/...` imports (through
