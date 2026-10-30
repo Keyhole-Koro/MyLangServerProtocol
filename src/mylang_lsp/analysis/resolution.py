@@ -15,12 +15,12 @@ BUILTINS = {"BOOL", "U8", "U16", "I32", "U32", "CHAR", "FLOAT", "DOUBLE",
             "VOID", "LONG", "SHORT"}
 BUILTIN_TYPE_NAMES = {"bool", "u8", "u16", "i32", "u32", "char", "float",
                       "double", "void", "long", "short", "str"}
-MODIFIERS = {"CONST", "REF", "MUT", "ASTARISK"}
+MODIFIERS = {"CONST", "BORROW", "MUT", "ASTARISK"}
 
 
 def base_type(text: str) -> str:
     names = re.findall(r"[A-Za-z_][A-Za-z_0-9]*", text)
-    return next((name for name in names if name not in {"const", "ref", "mut"}), "")
+    return next((name for name in names if name not in {"const", "borrow", "mut"}), "")
 
 
 def type_before(tokens, end):

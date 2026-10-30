@@ -1,8 +1,8 @@
 struct A { i32 x; };
 struct B { i32 x; };
 struct Holder { A value; };
-i32 (ref A a) get() { return a.x; }
-i32 (ref B b) get() { return b.x; }
+i32 (borrow A a) get() { return a.x; }
+i32 (borrow B b) get() { return b.x; }
 A make() { A a; return a; }
 i32 main() {
     A a;
