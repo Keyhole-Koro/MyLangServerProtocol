@@ -1,0 +1,24 @@
+import world from "world.mln";
+import { Node, NodeRow, Window, Player, node_children_Iter, node_by_owner_Iter } from "world.mln";
+import { Option } from "@std/core/option.mln";
+import { Iterator } from "@std/core/iter.mln";
+
+Node must(Option<Node> n) { return case n of { Some(v) -> v; None -> world.node_from_raw(0); }; }
+
+i32 main() {
+    Node root = must(world.new_node());
+    Node leaf = must(world.new_node());
+    root.children_add(leaf);
+    for (Node each in root.children()) { each.set_owner(5); }
+    root.row().kind = 7;
+    i32 seen = leaf.owner();
+    for (Node owned in world.node_by_owner(seen)) { owned.delete(); }
+    Window window = case world.new_window() of { Some(v) -> v; None -> world.window_from_raw(0); };
+    window.set_focus(leaf);
+    bool alive = root.is_live();
+    bool focused = case window.focus() of { Some(_) -> true; None -> false; };
+    bool has_parent = case leaf.parent() of { Some(_) -> true; None -> false; };
+    bool badged = case world.player_by_badge(3) of { Some(_) -> true; None -> false; };
+    if (alive && focused && has_parent && badged) { return 1; }
+    return world.count_nodes();
+}

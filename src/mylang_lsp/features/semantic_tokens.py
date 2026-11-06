@@ -54,15 +54,17 @@ class SemanticTokenService:
     def __init__(self, query_frontend: Callable[[str], Optional[dict]]) -> None:
         self.query_frontend = query_frontend
 
-    def encode(self, text: str) -> List[int]:
+    def encode(self, text: str, uri: str = "") -> List[int]:
         lines = text.splitlines()
         line_map = LineMap(text)
         protected = protected_spans(lines)
         base: Dict[Tuple[int, int], Tuple[int, str]] = {}
         engine: Dict[Tuple[int, int], Tuple[int, str]] = {}
-        result = self.query_frontend(text)
+        result = self.query_frontend(text, uri)
         if result:
-            for entry in result.get("tokens", []):
+            # A model's result runs on past the file, into its generated code.
+            entries = [entry for entry in result.get("tokens", []) if entry[0] < len(lines)]
+            for entry in entries:
                 line_no, column, length, kind = entry[0], entry[1], entry[2], entry[3]
                 if 0 <= line_no < len(lines):
                     start = line_map.offset_to_lsp(line_map.native_offset(line_no, column))
@@ -75,9 +77,7 @@ class SemanticTokenService:
                 if length and len(entry) > 4 and entry[4] in TOKEN_TYPE_INDEX:
                     engine[(line_no, column)] = (length, entry[4])
 
-            for line_no, column, length in self.generic_type_argument_spans(
-                lines, result.get("tokens", [])
-            ):
+            for line_no, column, length in self.generic_type_argument_spans(lines, entries):
                 start = line_map.offset_to_lsp(line_map.native_offset(line_no, column))
                 end = line_map.offset_to_lsp(line_map.native_offset(line_no, column + length))
                 utf16_column_value = start["character"]

@@ -101,6 +101,29 @@ class DeclarationInfo:
     container: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class ModelSource:
+    """How the analysis of a `.model.mln` relates to the file as written.
+
+    The analysed text is the file followed by the code generated from it, so a
+    span before `generated_start` is already a position in the file. A span
+    from there on belongs to a generated line, which came from one source word.
+    """
+
+    document: DocumentSnapshot
+    generated_start: int
+    generated_line: int
+    origins: Tuple[SourceSpan, ...]
+    # A word of the model to what it names: itself for a declaration, None for
+    # a keyword.
+    words: Dict[SourceSpan, Optional[SourceSpan]]
+    token_count: int
+
+    def origin(self, line: int) -> SourceSpan:
+        index = min(max(line - self.generated_line, 0), len(self.origins) - 1)
+        return self.origins[index]
+
+
 @dataclass
 class AnalysisUnit:
     snapshot: DocumentSnapshot
@@ -113,6 +136,27 @@ class AnalysisUnit:
     declarations: List[DeclarationInfo]
     import_targets: Dict[str, str] = field(default_factory=dict)
     impls: List[ImplInfo] = field(default_factory=list)
+    model: Optional[ModelSource] = None
+
+    @property
+    def document(self) -> DocumentSnapshot:
+        """The document as written, which positions from an editor address."""
+        return self.model.document if self.model else self.snapshot
+
+    @property
+    def source_tokens(self) -> List[Token]:
+        """The tokens somebody wrote, without any that were generated."""
+        return self.tokens[:self.model.token_count] if self.model else self.tokens
+
+    def written_span(self, span: SourceSpan) -> SourceSpan:
+        """Where `span` shows in the document as written."""
+        if self.model is None or span.start < self.model.generated_start:
+            return span
+        line = self.snapshot.line_map.offset_to_lsp(span.start)["line"]
+        return self.model.origin(line)
+
+    def written_range(self, span: SourceSpan) -> dict:
+        return self.snapshot.line_map.range(self.written_span(span))
 
 
 class WorkspaceIndex:

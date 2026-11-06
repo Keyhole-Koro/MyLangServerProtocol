@@ -1,0 +1,10 @@
+import world from "world.mln";
+import { Node } from "world.mln";
+
+i32 total(i32 id) {
+    world.node_from_raw(id).children_add(world.node_from_raw(id));
+    world.node_from_raw(id).row().kind = 7;
+    return world.node_from_raw(id).children_count();
+}
+
+i32 main() { return total(0); }

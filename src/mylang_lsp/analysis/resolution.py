@@ -81,7 +81,7 @@ class ExpressionResolver:
             elif token.kind == "R_BRACE" and stack:
                 scopes.append((stack.pop(), token.index))
         bindings = []
-        for token in tokens:
+        for token in self.unit.source_tokens:
             if token.role not in ("variable", "parameter"):
                 continue
             declared = type_before(tokens, token.index - 1)
@@ -235,33 +235,54 @@ class ExpressionResolver:
         if token.kind != "IDENTIFIER":
             return None
         if end >= 2 and tokens[end - 1].kind in ("DOT", "MEMBER"):
-            owner_type = self.expression_type(end - 2, at, depth + 1)
-            if owner_type is None:
+            found = self.field(end, at, depth)
+            if found is None:
                 return None
-            owner = base_type(owner_type)
-            target = self.unit.import_targets.get(owner)
-            unit = self.index.get(target) if target else self.unit
-            if unit is None:
-                self.pending_import = target
-                return None
-            declaration = next((d for d in unit.declarations if d.name == owner
-                                and d.kind == "struct"), None)
-            if declaration is None:
-                return None
-            start = next(t.index for t in unit.tokens if t.span == declaration.span)
-            opening = next((t.index for t in unit.tokens[start:] if t.kind == "L_BRACE"), None)
-            if opening is None:
-                return None
-            close = self.frontend._matching_close(unit.tokens, opening)
-            for field in unit.tokens[opening + 1:close]:
-                if field.text == token.text:
-                    declared = type_before(unit.tokens, field.index - 1)
-                    if declared:
-                        template = " ".join(t.text for t in unit.tokens[start:opening])
-                        return self._substitute(declared, template, owner_type)
-            return None
+            unit, field, template, owner_type = found
+            declared = type_before(unit.tokens, field.index - 1)
+            return self._substitute(declared, template, owner_type) if declared else None
         binding = self.binding(token.text, at)
         return binding.type if binding else None
+
+    def field(self, name_index, at, depth=0):
+        """The declaration of the field in `owner.name`, as (its unit, its
+        token, the struct's header, the owner's type)."""
+        tokens = self.unit.tokens
+        if name_index < 2 or tokens[name_index - 1].kind not in ("DOT", "MEMBER"):
+            return None
+        owner_type = self.expression_type(name_index - 2, at, depth + 1)
+        if owner_type is None:
+            return None
+        owner = base_type(owner_type)
+        unit = self._declaring_unit(owner)
+        if unit is None:
+            return None
+        declaration = next((d for d in unit.declarations if d.name == owner
+                            and d.kind == "struct"), None)
+        if declaration is None:
+            return None
+        start = next(t.index for t in unit.tokens if t.span == declaration.span)
+        opening = next((t.index for t in unit.tokens[start:] if t.kind == "L_BRACE"), None)
+        if opening is None:
+            return None
+        close = self.frontend._matching_close(unit.tokens, opening)
+        for field in unit.tokens[opening + 1:close]:
+            if field.text == tokens[name_index].text and type_before(unit.tokens, field.index - 1):
+                template = " ".join(t.text for t in unit.tokens[start:opening])
+                return unit, field, template, owner_type
+        return None
+
+    def _declaring_unit(self, owner):
+        target = self.unit.import_targets.get(owner)
+        if target:
+            unit = self.index.get(target)
+            if unit is None:
+                self.pending_import = target
+            return unit
+        # A type a call returned need not be imported by name.
+        units = [self.unit] + [self.index.get(uri) for uri in self.unit.import_targets.values()]
+        return next((unit for unit in units if unit is not None and any(
+            d.name == owner and d.kind == "struct" for d in unit.declarations)), self.unit)
 
     @staticmethod
     def _substitute(result, template, concrete):

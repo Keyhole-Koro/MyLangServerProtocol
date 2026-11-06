@@ -20,6 +20,7 @@ A lightweight Language Server Protocol implementation for MyLang.
   doc shows the trait item's, and go-to-implementation lists a trait's impls
   or a trait item's impl items; generic impls (`impl<T: Eq> Eq for Box<T>`)
   and default items are covered too
+- `.model.mln` files: see below
 - local and relative-import function documentation lookup
 - generic declarations (including `const N` capacity parameters),
   instantiations, and named-imported templates are
@@ -36,6 +37,35 @@ go-to-definition. Completion is not implemented yet.
 
 Source locations from the native syntax checker are converted from UTF-8 byte
 columns to the UTF-16 positions used by LSP clients.
+
+## Model files
+
+A `.model.mln` file declares entity tables that the compiler expands to
+ordinary MyLang (`docs/design/mylang-model.md` in MyComputer). The expansion is
+what the server analyses, so the generated functions are found like any others:
+
+- diagnostics are the generator's own checks, one per bad statement, on the
+  word that is wrong, plus syntax errors in the lines that pass through
+- `entity`, `max`, `has`, `knows`, `many`, `one`, `as`, `ordered`, `index`,
+  `unique`, entity names and relation names are highlighted; a column is
+  highlighted exactly as a struct field is
+- go-to-definition from a generated function lands on the word that produced
+  it: the entity's name for a table function, the relation's name (or its
+  inverse's) for a relation function, the column's name for a column accessor
+  or index; `.kind` after `row()` lands on the column too
+- Hover shows the generated signature and doc comment, in a file that uses it
+  and on its declaration in the model
+- find references on an entity or a relation in the model covers everything
+  generated from it, under any name, in any file; find references on one
+  generated name covers that name and its declaration
+- document symbols list entities and relations, not the generated functions
+
+The generator's naming rules live only in the compiler. `mylang-syntax-check
+--stdio` answers a `model <length>` record with two lines of JSON: the trace
+from `model_trace()` (`model_expand.h`), and the usual result for its text.
+That text is the file with every word still on its own position, then the
+generated code, so a token of the file needs no mapping and a generated line
+maps back through one origin in the trace. `AnalysisUnit.model` holds that map.
 
 ## Run manually
 
