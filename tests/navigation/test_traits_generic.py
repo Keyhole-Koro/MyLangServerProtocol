@@ -31,7 +31,7 @@ def test(server):
         assert target["range"]["start"] == position(source, "doubled() {")
 
         # `impl<T: Eq> Eq for Box<T>` is an impl of Eq for Box<T>.
-        hover = request("textDocument/hover", "eq(Box")["contents"]["value"]
+        hover = request("textDocument/hover", "eq(borrow Box")["contents"]["value"]
         assert "`impl Eq for Box<T>`" in hover, hover
     print("[PASS] traits: generic impls, default items")
 
