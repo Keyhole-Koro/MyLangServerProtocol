@@ -118,7 +118,7 @@ LEXICAL_CASES = [
     (fixture_text("semantic/lexical-strings.mln"),
      {"char": "type", "'x'": "string", '"hi"': "string"}),
     (fixture_text("semantic/lexical-ownership.mln"),
-     {"borrow": "ownershipRef", "move": "ownershipMove"}),
+     {"borrow": "ownershipBorrow", "move": "ownershipMove"}),
     (fixture_text("semantic/lexical-bool.mln"),
      {"bool": "type"}),
     (fixture_text("semantic/lexical-widths.mln"),

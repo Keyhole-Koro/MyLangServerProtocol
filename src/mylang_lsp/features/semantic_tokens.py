@@ -8,7 +8,7 @@ from ..source_text import ProtectedSpans, protected_spans, utf16_column
 
 
 TOKEN_TYPES = [
-    "comment", "docTag", "string", "keyword", "operator", "ownershipRef",
+    "comment", "docTag", "string", "keyword", "operator", "ownershipBorrow",
     "ownershipMove", "namespace", "number", "type", "struct", "function",
     "method", "parameter", "variable", "property", "enum", "enumMember",
     "result", "resultVariant", "decorator",
@@ -27,7 +27,7 @@ KIND_TO_TYPE = {
     "BOOL": "type", "U8": "type", "U16": "type", "I32": "type",
     "U32": "type", "CHAR": "type", "FLOAT": "type", "DOUBLE": "type",
     "VOID": "type", "LONG": "type", "SHORT": "type",
-    "BORROW": "ownershipRef", "MOVE": "ownershipMove", "AMPERSAND": "ownershipRef",
+    "BORROW": "ownershipBorrow", "MOVE": "ownershipMove", "AMPERSAND": "ownershipBorrow",
     "EQ": "operator", "NEQ": "operator", "LTE": "operator", "GTE": "operator",
     "AND": "operator", "OR": "operator", "LSH": "operator", "RSH": "operator",
     "INC": "operator", "DEC": "operator", "ASTARISK": "operator",
