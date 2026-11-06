@@ -1,0 +1,3 @@
+import { answer } from "unsafe-lib.mln";
+
+i32 main() { return answer(); }

@@ -479,7 +479,10 @@ class LspServer:
     def import_path(self, importer_dir: Path, written: str) -> Path:
         """Resolve an import as the compiler does: `@alias/rest` through the
         nearest mylang.toml's [alias] table, anything else relative to the
-        importing file."""
+        importing file. An import does not name `.unsafe` or `.model`."""
+        return self.source_file(self.written_path(importer_dir, written))
+
+    def written_path(self, importer_dir: Path, written: str) -> Path:
         if not written.startswith("@"):
             return importer_dir / written
         alias, _, rest = written.partition("/")
@@ -488,6 +491,15 @@ class LspServer:
         if target is None or root is None:
             return importer_dir / written
         return root / target / rest
+
+    def source_file(self, path: Path) -> Path:
+        if path.exists() or path.suffix != ".mln":
+            return path
+        for modifier in (".unsafe.mln", ".model.mln"):
+            candidate = path.with_suffix(modifier)
+            if candidate.exists():
+                return candidate
+        return path
 
     def project_aliases(self, directory: Path) -> tuple:
         cache = self.__dict__.setdefault("_alias_cache", {})
