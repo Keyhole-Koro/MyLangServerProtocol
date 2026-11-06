@@ -92,7 +92,7 @@ def test_real_errors():
         (GOOD + "index A.w;\n", "w;", "has no column 'w'"),
         (GOOD + "index C.x;\n", "C.x", "unknown entity 'C'"),
         (GOOD + "index A;\n", "index", "expected Entity.column"),
-        (GOOD.replace("i32 y", "bool y") + "unique A.y;\n", "A.y", "only an i32 column"),
+        (GOOD.replace("i32 y", "bool y") + "unique A.y;\n", "A.y", "only an i32 or newtype column"),
         ("entity max 4 { i32 x; }\n", "max", "needs `max N`"),
         ("entity A max 9999 { i32 x; }\n", "9999", "max must be between"),
         ("entity A 4 { i32 x; }\n", "A", "needs `max N`"),
