@@ -1,0 +1,29 @@
+package world;
+
+import { Text } from "@std/text/text.mln";
+
+// The max of a window is not a keyword in a comment: entity has many as.
+entity Window max 16 { Text<32> title; }
+entity Node   max 64 {
+    i32 kind;
+    Text<16> label;
+    i32 owner;      // the process it belongs to
+    i32 samples[8];
+    fn(i32 id) -> void on_click;
+}
+entity Player max 16 { i32 number; i32 badge; };
+
+Node   has   many Node as children / parent, ordered;
+Window knows one  Node as focus;
+Window knows many Player as players / window;
+
+index Node.owner;
+unique Player.badge;
+
+/** How many nodes are alive, out of the first two ids. */
+export i32 count_nodes() {
+    i32 total = 0;
+    if (node_live_id(1)) { total++; }
+    if (node_live_id(2)) { total++; }
+    return total;
+}

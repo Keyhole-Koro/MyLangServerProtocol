@@ -96,6 +96,24 @@ def test_builtin_string_methods():
                 server.stop_syntax_checker()
 
 
+def test_import_omits_modifier():
+    with FixtureWorkspace() as workspace:
+        library = workspace.materialize("definition-resolution/unsafe-lib.unsafe.mln")
+        caller = workspace.materialize("definition-resolution/unsafe-caller.mln")
+        server = LspTestServer()
+        try:
+            server.document_store.update(caller.uri, caller.source, 1)
+            result = server.request(1, "textDocument/definition", {
+                "textDocument": {"uri": caller.uri},
+                "position": position(caller.source, "answer", 1, 1),
+            })["result"]
+            assert isinstance(result, dict), result
+            assert result["uri"] == library.uri, result
+            assert result["range"]["start"] == position(library.source, "answer()")
+        finally:
+            server.stop_syntax_checker()
+
+
 if __name__ == "__main__":
     server = LspTestServer()
     try:
@@ -103,5 +121,6 @@ if __name__ == "__main__":
     finally:
         server.stop_syntax_checker()
     test_imports()
+    test_import_omits_modifier()
     test_builtin_string_methods()
     print("[PASS] scoped definition resolution and cold imports")

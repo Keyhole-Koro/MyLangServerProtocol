@@ -13,11 +13,11 @@ class DiagnosticsService:
     def __init__(self, query_frontend: Callable[[str], Optional[dict]]) -> None:
         self.query_frontend = query_frontend
 
-    def analyze(self, text: str) -> List[dict]:
+    def analyze(self, text: str, uri: str = "") -> List[dict]:
         diagnostics = self.bracket_diagnostics(text)
         if diagnostics:
             return diagnostics
-        return self.frontend_diagnostics(text)
+        return self.frontend_diagnostics(text, uri)
 
     def bracket_diagnostics(self, text: str) -> List[dict]:
         lines = text.splitlines()
@@ -52,8 +52,8 @@ class DiagnosticsService:
             ))
         return diagnostics
 
-    def frontend_diagnostics(self, text: str) -> List[dict]:
-        result = self.query_frontend(text)
+    def frontend_diagnostics(self, text: str, uri: str = "") -> List[dict]:
+        result = self.query_frontend(text, uri)
         if not result or result.get("status") == "ok":
             return []
         diagnostics = []

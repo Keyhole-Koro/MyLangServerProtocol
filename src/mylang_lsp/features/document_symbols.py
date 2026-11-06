@@ -29,8 +29,8 @@ class DocumentSymbolService:
     def __init__(self, query_frontend: Callable[[str], Optional[dict]]) -> None:
         self.query_frontend = query_frontend
 
-    def symbols(self, text: str) -> List[dict]:
-        result = self.query_frontend(text)
+    def symbols(self, text: str, uri: str = "") -> List[dict]:
+        result = self.query_frontend(text, uri)
         if not result:
             return []
         lines = text.splitlines()

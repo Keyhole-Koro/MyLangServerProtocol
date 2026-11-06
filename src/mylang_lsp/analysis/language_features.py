@@ -1,3 +1,4 @@
+import re
 from typing import List, Optional, Sequence, Tuple
 
 from .models import (
@@ -35,6 +36,8 @@ class LanguageFeatures:
             None,
         )
         token = self._token_at(unit.tokens, offset)
+        if function is None:
+            function = self._model_function_at(unit, token)
         if function is None and token is not None and token.kind in ("IDENTIFIER", "FROM"):
             if self._is_callee(unit, token.index):
                 functions = ExpressionResolver(self.frontend, self.index, unit).functions(token.index)
@@ -152,6 +155,12 @@ class LanguageFeatures:
         if token is None:
             return None
 
+        if unit.model is not None and token.span in unit.model.words:
+            declared = unit.model.words[token.span]
+            if declared is None:
+                return None
+            return {"uri": snapshot.uri, "range": snapshot.line_map.range(declared)}
+
         exact = next(
             (item for item in unit.declarations if item.span == token.span),
             None,
@@ -211,6 +220,13 @@ class LanguageFeatures:
                 ])
 
         if token.role == "property":
+            # A model's columns are read through the row struct.
+            found = resolver.field(token.index, token.index)
+            if found is not None and found[0].model is not None:
+                return {
+                    "uri": found[0].snapshot.uri,
+                    "range": found[0].written_range(found[1].span),
+                }
             return None
         container = None
         if token.role in ("enumMember", "resultVariant") and token.index >= 2:
@@ -309,14 +325,16 @@ class LanguageFeatures:
         if selected is None:
             return []
 
-        targets = self._location_keys(self.definition(snapshot, position))
+        definition = self.definition(snapshot, position)
+        targets = self._location_keys(definition)
         if not targets:
             return []
 
+        names = self.reference_names(snapshot, position)
         locations: dict[tuple, dict] = {}
         for candidate_unit in self.index.units():
-            for token in candidate_unit.tokens:
-                if token.kind != "IDENTIFIER" or token.text != selected.text:
+            for token in candidate_unit.source_tokens:
+                if token.kind != "IDENTIFIER" or token.text not in names:
                     continue
                 token_location = {
                     "uri": candidate_unit.snapshot.uri,
@@ -326,13 +344,36 @@ class LanguageFeatures:
                 if not include_declaration and token_key in targets:
                     continue
                 definitions = self.definition(
-                    candidate_unit.snapshot,
-                    candidate_unit.snapshot.line_map.offset_to_lsp(token.span.start),
+                    candidate_unit.document,
+                    candidate_unit.document.line_map.offset_to_lsp(token.span.start),
                 )
                 if targets.intersection(self._location_keys(definitions)):
                     locations[token_key] = token_location
 
+        if include_declaration:
+            # A generated name is not spelled at the declaration it came from.
+            for location in definition if isinstance(definition, list) else [definition]:
+                target_unit = self.index.get(location["uri"])
+                if target_unit is not None and target_unit.model is not None:
+                    locations[self._location_key(location)] = location
+
         return [locations[key] for key in sorted(locations)]
+
+    def reference_names(self, snapshot: DocumentSnapshot, position: dict) -> set[str]:
+        """The names a reference to the symbol at *position* can be spelled
+        with. A declaration in a model answers for all it generates."""
+        name = self.identifier_at(snapshot, position)
+        if name is None:
+            return set()
+        unit = self.unit(snapshot)
+        token = self._token_at(unit.tokens, snapshot.line_map.lsp_to_offset(position))
+        declared = unit.model.words.get(token.span) if unit.model is not None else None
+        if declared is None:
+            return {name}
+        return {name} | {
+            declaration.name for declaration in unit.declarations
+            if unit.written_span(declaration.span) == declared
+        }
 
     def identifier_at(
         self, snapshot: DocumentSnapshot, position: dict
@@ -437,6 +478,22 @@ class LanguageFeatures:
             start["character"],
             end["line"],
             end["character"],
+        )
+
+    def _model_function_at(
+        self, unit: AnalysisUnit, token: Optional[Token]
+    ) -> Optional[FunctionInfo]:
+        """The function a word of a model generates under that word's name."""
+        if unit.model is None or token is None:
+            return None
+        declared = unit.model.words.get(token.span)
+        if declared is None:
+            return None
+        return next(
+            (function for function in unit.functions
+             if function.name == token.text
+             and unit.written_span(function.name_span) == declared),
+            None,
         )
 
     def _matching_declarations(
@@ -553,6 +610,9 @@ class LanguageFeatures:
         if declaration.name not in header:
             header = f"struct {declaration.name}"
         fields = self._struct_fields(unit, open_index, close_index)
+        if unit.model is not None:
+            # The generator's own fields are not for anybody to read.
+            fields = [field for field in fields if not re.search(r"\b__", field)]
         lines = [header + " {"]
         lines.extend(f"    {field}" for field in fields)
         lines.append("}")
@@ -667,7 +727,7 @@ class LanguageFeatures:
             return None
         return {
             "uri": declaration.uri,
-            "range": unit.snapshot.line_map.range(declaration.span),
+            "range": unit.written_range(declaration.span),
         }
 
     def _definition_locations(

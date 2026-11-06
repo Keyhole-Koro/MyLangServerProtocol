@@ -9,6 +9,7 @@ from .models import (
     FunctionDoc,
     FunctionInfo,
     ImplInfo,
+    ModelSource,
     OPEN_TO_CLOSE,
     ParamDoc,
     ParameterInfo,
@@ -16,6 +17,7 @@ from .models import (
 )
 from .documents import DocumentSnapshot, SourceSpan
 from .resolution import type_before
+from ..frontend.native import model_text
 
 
 @dataclass(frozen=True)
@@ -46,9 +48,18 @@ class FrontendBackend:
     def analyze(self, snapshot: DocumentSnapshot) -> AnalysisUnit:
         key = (snapshot.uri, snapshot.version)
         cached = self.cache.get(key)
-        if cached is not None and cached.snapshot.text == snapshot.text:
+        if cached is not None and cached.document.text == snapshot.text:
             return cached
-        result = self.query_frontend(snapshot.text) or {}
+        result = self.query_frontend(snapshot.text, snapshot.uri) or {}
+        document = snapshot
+        model = result.get("model")
+        if model is not None:
+            # Everything below reads the generated code like any other source.
+            snapshot = DocumentSnapshot.create(
+                snapshot.uri,
+                model_text(snapshot.text, model["generated"]),
+                snapshot.version,
+            )
         tokens = self._tokens(snapshot, result.get("tokens", []))
         regions = self._trait_regions(snapshot, tokens)
         functions, declaration_opens = self._functions(
@@ -56,6 +67,14 @@ class FrontendBackend:
         )
         imported_names, imported_packages, import_sources = self._imports(tokens)
         declarations = self._declarations(snapshot, tokens, result.get("symbols", []))
+        model_source = None
+        if model is not None:
+            model_source = self._model_source(document, snapshot, model, tokens)
+            # A declaration of the model is known by what it generates.
+            declarations = [
+                declaration for declaration in declarations
+                if declaration.span not in model_source.words
+            ]
         unit = AnalysisUnit(
             snapshot,
             tokens,
@@ -66,10 +85,45 @@ class FrontendBackend:
             import_sources,
             declarations,
             impls=[region.impl for region in regions if region.impl is not None],
+            model=model_source,
         )
         self.invalidate(snapshot.uri)
         self.cache[key] = unit
         return unit
+
+    def _model_source(
+        self,
+        document: DocumentSnapshot,
+        snapshot: DocumentSnapshot,
+        model: dict,
+        tokens: Sequence[Token],
+    ) -> ModelSource:
+        line_map = snapshot.line_map
+
+        def span(line: int, column: int, length: int) -> SourceSpan:
+            return SourceSpan(
+                line_map.native_offset(line, column),
+                line_map.native_offset(line, column + length),
+            )
+
+        origins = tuple(span(*origin) for origin in model["origins"])
+        # Whatever generated code is a declaration, so a column is one too.
+        words: Dict[SourceSpan, Optional[SourceSpan]] = {
+            origin: origin for origin in origins
+        }
+        for line, column, length, _kind, _role, *declaration in model["words"]:
+            words[span(line, column, length)] = (
+                span(*declaration) if declaration[2] else None
+            )
+        generated_line = model["generatedLine"]
+        return ModelSource(
+            document=document,
+            generated_start=line_map.native_offset(generated_line, 0),
+            generated_line=generated_line,
+            origins=origins or (SourceSpan(0, 0),),
+            words=words,
+            token_count=sum(1 for token in tokens if token.line < generated_line),
+        )
 
     def _declarations(
         self,

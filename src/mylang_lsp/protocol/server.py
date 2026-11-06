@@ -371,9 +371,9 @@ class LspServer:
             target_uri = self.language_features.definition_import_target_at(doc, position)
             if target_uri is not None and self.workspace_index.get(target_uri) is None:
                 self.index_import(target_uri)
-            name = self.language_features.identifier_at(doc, position)
-            if name is not None:
-                self.index_workspace_candidates(name)
+            names = self.language_features.reference_names(doc, position)
+            if names:
+                self.index_workspace_candidates(*names)
             for open_uri in list(self.open_documents):
                 self.index_document(open_uri)
             include_declaration = params.get("context", {}).get(
@@ -479,7 +479,10 @@ class LspServer:
     def import_path(self, importer_dir: Path, written: str) -> Path:
         """Resolve an import as the compiler does: `@alias/rest` through the
         nearest mylang.toml's [alias] table, anything else relative to the
-        importing file."""
+        importing file. An import does not name `.unsafe` or `.model`."""
+        return self.source_file(self.written_path(importer_dir, written))
+
+    def written_path(self, importer_dir: Path, written: str) -> Path:
         if not written.startswith("@"):
             return importer_dir / written
         alias, _, rest = written.partition("/")
@@ -488,6 +491,15 @@ class LspServer:
         if target is None or root is None:
             return importer_dir / written
         return root / target / rest
+
+    def source_file(self, path: Path) -> Path:
+        if path.exists() or path.suffix != ".mln":
+            return path
+        for modifier in (".unsafe.mln", ".model.mln"):
+            candidate = path.with_suffix(modifier)
+            if candidate.exists():
+                return candidate
+        return path
 
     def project_aliases(self, directory: Path) -> tuple:
         cache = self.__dict__.setdefault("_alias_cache", {})
@@ -527,9 +539,9 @@ class LspServer:
         if target_doc is not None:
             self.index_document(target_uri)
 
-    def index_workspace_candidates(self, name: str) -> None:
+    def index_workspace_candidates(self, *names: str) -> None:
         """Index workspace sources that may mention a requested symbol."""
-        needle = name.encode("utf-8")
+        needles = [name.encode("utf-8") for name in names]
         ignored = {".git", ".hg", ".svn", "node_modules", "__pycache__"}
         for root in self.workspace_roots:
             if not root.is_dir():
@@ -549,7 +561,7 @@ class LspServer:
                         data = path.read_bytes()
                     except OSError:
                         continue
-                    if needle not in data:
+                    if not any(needle in data for needle in needles):
                         continue
                     doc = self.document_store.get(uri)
                     if doc is None:
@@ -597,7 +609,7 @@ class LspServer:
         })
 
     def syntax_diagnostics_for_uri(self, uri: str, text: str) -> List[dict]:
-        return self.diagnostics_service.analyze(text)
+        return self.diagnostics_service.analyze(text, uri)
 
     def syntax_diagnostics(self, text: str) -> List[dict]:
         return self.diagnostics_service.analyze(text)
@@ -608,8 +620,8 @@ class LspServer:
     def lr1_diagnostics(self, text: str) -> List[dict]:
         return self.diagnostics_service.frontend_diagnostics(text)
 
-    def query_syntax_checker(self, text: str) -> Optional[dict]:
-        return self.native_frontend.query(text)
+    def query_syntax_checker(self, text: str, uri: str = "") -> Optional[dict]:
+        return self.native_frontend.query(text, uri)
 
     def start_syntax_checker(self) -> bool:
         return self.native_frontend.start()
@@ -624,7 +636,7 @@ class LspServer:
         return utf16_column(line, codepoint_column)
 
     def semantic_tokens_for_uri(self, uri: str, text: str) -> List[int]:
-        return self.semantic_token_service.encode(text)
+        return self.semantic_token_service.encode(text, uri)
 
     def semantic_tokens(self, text: str) -> List[int]:
         return self.semantic_token_service.encode(text)
@@ -653,7 +665,7 @@ class LspServer:
     ) -> bool:
         return is_protected(line_no, start, end, protected)
     def document_symbols_for_uri(self, uri: str, text: str) -> List[dict]:
-        return self.document_symbol_service.symbols(text)
+        return self.document_symbol_service.symbols(text, uri)
 
     def document_symbols(self, text: str) -> List[dict]:
         return self.document_symbol_service.symbols(text)
