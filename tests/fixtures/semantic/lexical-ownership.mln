@@ -1,1 +1,1 @@
-borrow i32 g(mut i32 a) { return a; }
+borrow i32 g(move i32 a) { return a; }

@@ -3,7 +3,7 @@ export trait Eq {
     /** True when both values are equal.
      * @param other The value to compare with.
      */
-    bool (borrow Self self) eq(borrow Self other);
+    bool (Self self) eq(Self other);
 }
 
 export trait From<S> {

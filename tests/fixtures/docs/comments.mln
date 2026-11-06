@@ -8,7 +8,7 @@ package math;
  * @param missing Ignored.
  * @return Their sum.
  */
-export i32 add<T>(mut i32 a, i32 b) { return a + b; }
+export i32 add<T>(move i32 a, i32 b) { return a + b; }
 
 /** Does not attach. */
 

@@ -35,7 +35,7 @@ def test(server):
         # Point reaches the impl item.
         uri, start = location_start(request("textDocument/definition", "eq(&b)"))
         assert uri == main.as_uri()
-        assert start == position(source, "eq(borrow Self")
+        assert start == position(source, "eq(Self")
 
         # Type::from reaches the associated function of that type's impl.
         targets = request("textDocument/definition", "from(3)")
@@ -55,7 +55,7 @@ def test(server):
         # Hovering the trait shows its contract, doc, and known impls.
         hover = request("textDocument/hover", "Eq for")["contents"]["value"]
         assert "trait Eq {" in hover, hover
-        assert "bool (borrow Self self) eq(borrow Self other);" in hover, hover
+        assert "bool (Self self) eq(Self other);" in hover, hover
         assert "Equality between two values" in hover, hover
         assert "`impl Eq for Point`" in hover, hover
 
@@ -77,10 +77,10 @@ def test(server):
         # Implementations of a trait item.
         result = server.request(101, "textDocument/implementation", {
             "textDocument": {"uri": library.as_uri()},
-            "position": position(library_source, "eq(borrow Self", after=1),
+            "position": position(library_source, "eq(Self", after=1),
         })["result"]
         uri, start = location_start(result)
-        assert start == position(source, "eq(borrow Self")
+        assert start == position(source, "eq(Self")
 
         result = server.request(102, "textDocument/implementation", {
             "textDocument": {"uri": library.as_uri()},

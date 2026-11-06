@@ -15,7 +15,7 @@ def test(server):
     add = functions["add"]
     assert add.package == "math"
     assert add.is_exported
-    assert add.signature == "add<T>(mut i32 a, i32 b) -> i32"
+    assert add.signature == "add<T>(move i32 a, i32 b) -> i32"
     assert [parameter.name for parameter in add.parameters] == ["a", "b"]
     assert add.doc.summary == "Adds values."
     assert add.doc.body == "Signed arithmetic."
