@@ -21,6 +21,9 @@ A lightweight Language Server Protocol implementation for MyLang.
   or a trait item's impl items; generic impls (`impl<T: Eq> Eq for Box<T>`)
   and default items are covered too
 - `.model.mln` files: see below
+- compiler errors: when a source is opened or saved, what `mlc --check` reports
+  appears next to the syntax errors. An edit hides the report until the next
+  save, since the compiler reads the file on disk
 - local and relative-import function documentation lookup
 - generic declarations (including `const N` capacity parameters),
   instantiations, and named-imported templates are
@@ -96,8 +99,14 @@ The package can also be launched directly with:
 PYTHONPATH=src python3 -m mylang_lsp
 ```
 
+A checker or compiler that cannot run would look like a file with no errors, so
+the server shows a warning the first time that happens.
+
 ## Tests
 
 ```bash
 python3 -m tests.run
 ```
+
+`make lsp-check` from the repository root runs the server's diagnostics over
+every `.mln` without an editor, and compares them with the compiler's parser.

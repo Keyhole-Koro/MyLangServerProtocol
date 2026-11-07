@@ -17,6 +17,7 @@ from ..features.document_symbols import (
     SYMBOL_KIND,
     DocumentSymbolService,
 )
+from ..features.compiler_check import CompilerCheck
 from ..features.semantic_tokens import (
     KIND_TO_TYPE,
     TOKEN_MODIFIERS,
@@ -39,6 +40,12 @@ class LspServer:
         self.syntax_result_cache = self.native_frontend.result_cache
         self.semantic_token_service = SemanticTokenService(self.query_syntax_checker)
         self.diagnostics_service = DiagnosticsService(self.query_syntax_checker)
+        self.compiler_check = CompilerCheck(
+            self.repo_root / "toolchain" / "MyLangCompiler" / "mlc"
+        )
+        self.compiler_diagnostics: Dict[str, List[dict]] = {}
+        self.unchecked_documents: set[str] = set()
+        self.warned_about: set[str] = set()
         self.document_symbol_service = DocumentSymbolService(self.query_syntax_checker)
         self.workspace_index = WorkspaceIndex()
         self.frontend_analysis = FrontendBackend(self.query_syntax_checker)
@@ -210,7 +217,11 @@ class LspServer:
 
         if method == "initialize":
             capabilities = {
-                "textDocumentSync": 1,
+                "textDocumentSync": {
+                    "openClose": True,
+                    "change": 1,
+                    "save": {"includeText": False},
+                },
                 "positionEncoding": "utf-16",
                 "hoverProvider": True,
                 "definitionProvider": True,
@@ -276,6 +287,7 @@ class LspServer:
             self.document_store.update(td["uri"], td.get("text", ""), td.get("version", 0))
             self.frontend_analysis.invalidate(td["uri"])
             self.workspace_index.remove(td["uri"])
+            self.unchecked_documents.add(td["uri"])
             if self.semantic_tokens_enabled:
                 self.pending_diagnostics[td["uri"]] = td.get("version", 0)
             else:
@@ -289,10 +301,19 @@ class LspServer:
                 self.document_store.update(td["uri"], text, td.get("version", 0))
                 self.frontend_analysis.invalidate(td["uri"])
                 self.workspace_index.remove(td["uri"])
+                self.unchecked_documents.discard(td["uri"])
+                self.compiler_diagnostics.pop(td["uri"], None)
                 if self.semantic_tokens_enabled:
                     self.pending_diagnostics[td["uri"]] = td.get("version", 0)
                 else:
                     self.publish_diagnostics(td["uri"], text)
+            return
+        if method == "textDocument/didSave":
+            uri = params["textDocument"]["uri"]
+            doc = self.document_store.get(uri)
+            if doc is not None:
+                self.unchecked_documents.add(uri)
+                self.publish_diagnostics(uri, doc.text)
             return
         if method == "textDocument/didClose":
             td = params["textDocument"]
@@ -301,6 +322,8 @@ class LspServer:
             self.frontend_analysis.invalidate(td["uri"])
             self.workspace_index.remove(td["uri"])
             self.pending_diagnostics.pop(td["uri"], None)
+            self.unchecked_documents.discard(td["uri"])
+            self.compiler_diagnostics.pop(td["uri"], None)
             self.clear_diagnostics(td["uri"])
             return
         if method == "textDocument/semanticTokens/full":
@@ -440,8 +463,49 @@ class LspServer:
             "method": "textDocument/publishDiagnostics",
             "params": {
                 "uri": uri,
-                "diagnostics": self.syntax_diagnostics_for_uri(uri, text),
+                "diagnostics": self.document_diagnostics(uri, text),
             },
+        })
+
+    def document_diagnostics(self, uri: str, text: str) -> List[dict]:
+        """Syntax errors, or else what the compiler said about the saved file.
+        mlc would only repeat a syntax error, so it is not shown twice."""
+        syntax = self.syntax_diagnostics_for_uri(uri, text)
+        if uri in self.unchecked_documents:
+            self.unchecked_documents.discard(uri)
+            self.run_compiler_check(uri, text)
+        return syntax or self.compiler_diagnostics.get(uri, [])
+
+    def run_compiler_check(self, uri: str, text: str) -> None:
+        self.compiler_diagnostics.pop(uri, None)
+        raw_path = self.uri_to_path(uri)
+        if not raw_path:
+            return
+        path = Path(raw_path)
+        try:
+            if path.read_text(encoding="utf-8", errors="replace") != text:
+                return
+        except OSError:
+            return
+        found = self.compiler_check.check(path, text)
+        if found is None:
+            self.warn_once(
+                "compiler",
+                f"MyLang: {self.compiler_check.compiler} did not run, "
+                "so only syntax errors are shown.",
+            )
+            return
+        self.compiler_diagnostics[uri] = found
+
+    def warn_once(self, tool: str, message: str) -> None:
+        """A tool that cannot run looks like a file with no errors, so say so."""
+        if tool in self.warned_about:
+            return
+        self.warned_about.add(tool)
+        self.send({
+            "jsonrpc": "2.0",
+            "method": "window/showMessage",
+            "params": {"type": 2, "message": message},
         })
 
     def publish_pending_diagnostics(self, uri: str, doc: DocumentSnapshot) -> None:
@@ -621,7 +685,14 @@ class LspServer:
         return self.diagnostics_service.frontend_diagnostics(text)
 
     def query_syntax_checker(self, text: str, uri: str = "") -> Optional[dict]:
-        return self.native_frontend.query(text, uri)
+        result = self.native_frontend.query(text, uri)
+        if result is None:
+            self.warn_once(
+                "syntax checker",
+                f"MyLang: {self.native_frontend.binary} did not answer, "
+                "so syntax errors are not shown.",
+            )
+        return result
 
     def start_syntax_checker(self) -> bool:
         return self.native_frontend.start()
