@@ -330,6 +330,14 @@ def test_hover():
         cases = [
             (caller, "new_node", 1, "new_node() -> Option<Node>"),
             (caller, ".row(", 2, "row() -> borrow NodeRow"),
+            (caller, ".kind", 2, "i32 kind;"),
+            (chained, ".kind", 2, "i32 kind;"),
+            (model, "kind;", 0, "i32 kind;"),
+            (model, "label;", 0, "Text<16> label;"),
+            (model, "samples", 1, "i32 samples[8];"),
+            (model, "on_click", 1, "fn(i32 id) -> void on_click;"),
+            # An indexed column is read through the method it generates.
+            (model, "Node.owner", 6, "owner() -> i32"),
             (caller, ".children(", 2, "children() -> node_children_Iter"),
             (caller, ".children_add(", 2, "children_add(Node member) -> bool"),
             (caller, ".parent(", 2, "parent() -> Option<Node>"),
@@ -365,6 +373,9 @@ def test_hover():
         # The range is the word under the pointer, in the file as written.
         result = hover(model, "children /")
         assert result["range"]["start"] == position(model.source, "children /")
+
+        # A keyword is no column.
+        assert hover(model, "max 64") is None
 
 
 def test_signature_help():

@@ -71,6 +71,13 @@ class LanguageFeatures:
                 "range": snapshot.line_map.range(token.span),
             }
 
+        field = self._field_label(unit, token)
+        if field is not None:
+            return {
+                "contents": {"kind": "markdown", "value": f"```mylang\n{field}\n```"},
+                "range": snapshot.line_map.range(token.span),
+            }
+
         context = self._call_context(unit, offset)
         if context is None:
             return None
@@ -576,6 +583,40 @@ class LanguageFeatures:
             if token.kind == "PACKAGE" and unit.tokens[index + 1].kind == "IDENTIFIER":
                 return unit.tokens[index + 1].text
         return ""
+
+    def _field_label(self, unit: AnalysisUnit, token: Optional[Token]) -> Optional[str]:
+        """How the field or model column under `token` is declared."""
+        if token is None:
+            return None
+        if token.role == "property":
+            resolver = ExpressionResolver(self.frontend, self.index, unit)
+            found = resolver.field(token.index, token.index)
+            if found is None:
+                return None
+            field_unit, field, template, _owner = found
+            if "<" in template:
+                # The struct says `T`; the reader wants what `T` is here.
+                declared = resolver.expression_type(token.index, token.index)
+                return f"{declared} {token.text};" if declared else None
+            return self._statement_text(field_unit, field)
+        if unit.model is None:
+            return None
+        declared = unit.model.words.get(token.span)
+        column = next((item for item in unit.tokens if item.span == declared), None)
+        return self._statement_text(unit, column) if column is not None else None
+
+    def _statement_text(self, unit: AnalysisUnit, name: Token) -> str:
+        """The member declaration holding `name`, as written, on one line."""
+        tokens = unit.tokens
+        start = end = name.index
+        while start > 0 and tokens[start - 1].kind not in ("SEMICOLON", "L_BRACE"):
+            start -= 1
+        while end + 1 < len(tokens) and tokens[end + 1].kind != "SEMICOLON":
+            end += 1
+        source = unit.snapshot.line_map.slice(
+            SourceSpan(tokens[start].span.start, tokens[end].span.end)
+        )
+        return " ".join(source.split()) + ";"
 
     def _struct_markdown(
         self, declaration: DeclarationInfo, unit: AnalysisUnit
