@@ -46,7 +46,7 @@ KIND_TO_TYPE = {
     "OF": "keyword", "TYPEDEF": "keyword", "STRUCT": "keyword",
     "UNION": "keyword", "ENUM": "keyword", "IMPORT": "keyword",
     "FROM": "keyword", "REST": "keyword", "EXPORT": "keyword",
-    "PACKAGE": "keyword", "TEST": "keyword",
+    "PACKAGE": "keyword",
 }
 
 
