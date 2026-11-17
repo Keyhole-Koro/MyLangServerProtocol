@@ -1,0 +1,2 @@
+namespace dom;
+export i32 list_select(i32 row) { return row; }

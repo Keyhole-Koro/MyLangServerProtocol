@@ -1,0 +1,5 @@
+import dom from "dom.mln";
+import dom from "dom-list.mln";
+i32 main() {
+    return dom.create() + dom.list_select(2);
+}

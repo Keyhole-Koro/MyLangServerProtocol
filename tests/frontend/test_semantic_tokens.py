@@ -83,6 +83,7 @@ CLASSIFY_CASES = [
     (fixture_text("semantic/classify-function.mln"),
      {"add": "function", "a": "parameter", "b": "parameter", "Point": "type"}),
     (fixture_text("semantic/classify-package.mln"), {"gfx": "namespace"}),
+    (fixture_text("semantic/classify-namespace.mln"), {"gfx": "namespace"}),
     (fixture_text("semantic/classify-import.mln"), {"math": "namespace"}),
     (fixture_text("semantic/classify-struct.mln"), {"Point": "struct"}),
     (fixture_text("semantic/classify-enum.mln"), {"Color": "enum"}),
@@ -123,6 +124,8 @@ LEXICAL_CASES = [
      {"bool": "type"}),
     (fixture_text("semantic/lexical-widths.mln"),
      {"u8": "type", "u16": "type"}),
+    (fixture_text("semantic/classify-namespace.mln"),
+     {"namespace": "keyword"}),
 ]
 
 # (source, [literal lexemes that must each appear as an exact token slice])

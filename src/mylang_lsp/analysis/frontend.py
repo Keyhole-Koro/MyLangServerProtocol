@@ -65,7 +65,7 @@ class FrontendBackend:
         functions, declaration_opens = self._functions(
             snapshot, tokens, result.get("symbols", []), regions
         )
-        imported_names, imported_packages, import_sources = self._imports(tokens)
+        imported_names, imported_packages, import_sources, namespace_sources = self._imports(tokens)
         declarations = self._declarations(snapshot, tokens, result.get("symbols", []))
         model_source = None
         if model is not None:
@@ -86,6 +86,7 @@ class FrontendBackend:
             declarations,
             impls=[region.impl for region in regions if region.impl is not None],
             model=model_source,
+            namespace_sources=namespace_sources,
         )
         self.invalidate(snapshot.uri)
         self.cache[key] = unit
@@ -280,10 +281,12 @@ class FrontendBackend:
 
     def _imports(
         self, tokens: Sequence[Token]
-    ) -> Tuple[set[str], set[str], Dict[str, str]]:
+    ) -> Tuple[set[str], set[str], Dict[str, str], Dict[str, List[str]]]:
         names: set[str] = set()
         packages: set[str] = set()
         sources: Dict[str, str] = {}
+        # A namespace may be imported from several files under its one name.
+        namespace_sources: Dict[str, List[str]] = {}
         index = 0
         while index < len(tokens):
             if tokens[index].kind != "IMPORT":
@@ -307,9 +310,12 @@ class FrontendBackend:
                 packages.add(name)
                 path = self._import_path_after(tokens, cursor)
                 if path is not None:
-                    sources[name] = path
+                    sources.setdefault(name, path)
+                    paths = namespace_sources.setdefault(name, [])
+                    if path not in paths:
+                        paths.append(path)
             index = cursor + 1
-        return names, packages, sources
+        return names, packages, sources, namespace_sources
 
     def _import_path_after(self, tokens: Sequence[Token], index: int) -> Optional[str]:
         cursor = index + 1
@@ -333,7 +339,7 @@ class FrontendBackend:
         }
         package = ""
         for index, token in enumerate(tokens[:-1]):
-            if token.kind == "PACKAGE" and tokens[index + 1].kind == "IDENTIFIER":
+            if token.kind in ("NAMESPACE", "PACKAGE") and tokens[index + 1].kind == "IDENTIFIER":
                 package = tokens[index + 1].text
                 break
 

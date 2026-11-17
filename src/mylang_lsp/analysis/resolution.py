@@ -179,9 +179,12 @@ class ExpressionResolver:
         if method and receiver is None:
             return []
         receiver_name = base_type(receiver) if receiver else None
-        target = self.unit.import_targets.get(package or (receiver_name or token.text))
-        if target and self.index.get(target) is None:
-            self.pending_import = target
+        # A namespace imported from several files may define the name in any
+        # of them; the first one not yet indexed is loaded next.
+        for target in self.unit.targets_of(package or (receiver_name or token.text)):
+            if self.index.get(target) is None:
+                self.pending_import = target
+                break
         matches = self.index.resolve_all(token.text, self.unit.snapshot.uri,
                                          "method" if method else "function", receiver, package)
         if matches:
@@ -195,9 +198,13 @@ class ExpressionResolver:
         # (not in a declaration imported under the receiver's name). Load
         # those packages lazily until the defining module is indexed.
         if method and receiver_name in BUILTIN_TYPE_NAMES:
-            for imported_package in self.unit.imported_packages:
-                candidate = self.unit.import_targets.get(imported_package)
-                if candidate and self.index.get(candidate) is None:
+            candidates = [
+                target
+                for imported_package in self.unit.imported_packages
+                for target in self.unit.targets_of(imported_package)
+            ]
+            for candidate in candidates:
+                if self.index.get(candidate) is None:
                     self.pending_import = candidate
                     break
         return matches
@@ -280,7 +287,8 @@ class ExpressionResolver:
                 self.pending_import = target
             return unit
         # A type a call returned need not be imported by name.
-        units = [self.unit] + [self.index.get(uri) for uri in self.unit.import_targets.values()]
+        targets = {uri for name in self.unit.import_targets for uri in self.unit.targets_of(name)}
+        units = [self.unit] + [self.index.get(uri) for uri in sorted(targets)]
         return next((unit for unit in units if unit is not None and any(
             d.name == owner and d.kind == "struct" for d in unit.declarations)), self.unit)
 

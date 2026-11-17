@@ -96,6 +96,29 @@ def test_builtin_string_methods():
                 server.stop_syntax_checker()
 
 
+def test_merged_namespace():
+    """Two files of namespace `dom` imported under its name are one namespace:
+    `dom.a` is in whichever file exports `a`."""
+    with FixtureWorkspace() as workspace:
+        core = workspace.materialize("definition-resolution/dom.mln")
+        rows = workspace.materialize("definition-resolution/dom-list.mln")
+        caller = workspace.materialize("definition-resolution/dom-caller.mln")
+        for needle, library, declaration in [("create", core, "create()"),
+                                             ("list_select", rows, "list_select(")]:
+            server = LspTestServer()
+            try:
+                server.document_store.update(caller.uri, caller.source, 1)
+                result = server.request(1, "textDocument/definition", {
+                    "textDocument": {"uri": caller.uri},
+                    "position": position(caller.source, needle, 0, 1),
+                })["result"]
+                assert isinstance(result, dict), (needle, result)
+                assert result["uri"] == library.uri, (needle, result)
+                assert result["range"]["start"] == position(library.source, declaration)
+            finally:
+                server.stop_syntax_checker()
+
+
 def test_import_omits_modifier():
     with FixtureWorkspace() as workspace:
         library = workspace.materialize("definition-resolution/unsafe-lib.unsafe.mln")
@@ -122,5 +145,6 @@ if __name__ == "__main__":
         server.stop_syntax_checker()
     test_imports()
     test_import_omits_modifier()
+    test_merged_namespace()
     test_builtin_string_methods()
     print("[PASS] scoped definition resolution and cold imports")

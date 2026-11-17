@@ -529,16 +529,28 @@ class LspServer:
                 return
             importer_dir = Path(importer_path).parent
             for import_name, relative_path in unit.import_sources.items():
-                if not relative_path.endswith(".mln"):
-                    continue
-                try:
-                    target_path = self.import_path(importer_dir, relative_path).resolve(strict=True)
-                except OSError:
-                    continue
-                target_uri = target_path.as_uri()
-                unit.import_targets[import_name] = target_uri
+                target_uri = self.import_target_uri(importer_dir, relative_path)
+                if target_uri is not None:
+                    unit.import_targets[import_name] = target_uri
+            for import_name, relative_paths in unit.namespace_sources.items():
+                targets = []
+                for relative_path in relative_paths:
+                    target_uri = self.import_target_uri(importer_dir, relative_path)
+                    if target_uri is not None and target_uri not in targets:
+                        targets.append(target_uri)
+                if targets:
+                    unit.namespace_targets[import_name] = targets
+                    unit.import_targets.setdefault(import_name, targets[0])
         finally:
             self.indexing_documents.remove(uri)
+
+    def import_target_uri(self, importer_dir: Path, written: str) -> Optional[str]:
+        if not written.endswith(".mln"):
+            return None
+        try:
+            return self.import_path(importer_dir, written).resolve(strict=True).as_uri()
+        except OSError:
+            return None
 
     def import_path(self, importer_dir: Path, written: str) -> Path:
         """Resolve an import as the compiler does: `@alias/rest` through the
@@ -594,14 +606,27 @@ class LspServer:
         return {}, None
 
     def index_import(self, target_uri: str) -> None:
-        """Index exactly one source import selected by an interactive request."""
-        target_doc = self.document_store.get(target_uri)
-        if target_doc is None:
-            target_path = self.uri_to_path(target_uri)
-            if target_path:
-                target_doc = self.document_store.load(target_uri, target_path)
-        if target_doc is not None:
-            self.index_document(target_uri)
+        """Index the source import selected by an interactive request. A file
+        imported under a namespace's name along with other files of it brings
+        them too: the name asked for may be any of theirs."""
+        for uri in self.namespace_siblings(target_uri):
+            if uri != target_uri and self.workspace_index.get(uri) is not None:
+                continue
+            target_doc = self.document_store.get(uri)
+            if target_doc is None:
+                target_path = self.uri_to_path(uri)
+                if target_path:
+                    target_doc = self.document_store.load(uri, target_path)
+            if target_doc is not None:
+                self.index_document(uri)
+
+    def namespace_siblings(self, target_uri: str) -> List[str]:
+        siblings = [target_uri]
+        for unit in self.workspace_index.units():
+            for targets in unit.namespace_targets.values():
+                if target_uri in targets:
+                    siblings.extend(uri for uri in targets if uri not in siblings)
+        return siblings
 
     def index_workspace_candidates(self, *names: str) -> None:
         """Index workspace sources that may mention a requested symbol."""

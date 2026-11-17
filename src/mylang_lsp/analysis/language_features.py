@@ -562,14 +562,14 @@ class LanguageFeatures:
         if token.text not in unit.imported_names and package is None:
             return None
 
-        target_uri = unit.import_targets.get(package or token.text)
+        target_uris = unit.targets_of(package or token.text)
         candidates = []
         for candidate_unit in self.index.units():
             if candidate_unit.snapshot.uri == unit.snapshot.uri:
                 continue
-            if target_uri is not None and candidate_unit.snapshot.uri != target_uri:
+            if target_uris and candidate_unit.snapshot.uri not in target_uris:
                 continue
-            if package is not None and target_uri is None and self._package_name(candidate_unit) != package:
+            if package is not None and not target_uris and self._package_name(candidate_unit) != package:
                 continue
             for declaration in candidate_unit.declarations:
                 if (declaration.name == token.text and declaration.kind == "struct"
@@ -580,7 +580,7 @@ class LanguageFeatures:
     @staticmethod
     def _package_name(unit: AnalysisUnit) -> str:
         for index, token in enumerate(unit.tokens[:-1]):
-            if token.kind == "PACKAGE" and unit.tokens[index + 1].kind == "IDENTIFIER":
+            if token.kind in ("NAMESPACE", "PACKAGE") and unit.tokens[index + 1].kind == "IDENTIFIER":
                 return unit.tokens[index + 1].text
         return ""
 

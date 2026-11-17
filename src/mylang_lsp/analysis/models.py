@@ -134,9 +134,24 @@ class AnalysisUnit:
     imported_packages: set[str]
     import_sources: Dict[str, str]
     declarations: List[DeclarationInfo]
+    # One target per import name: the first file imported under it.
     import_targets: Dict[str, str] = field(default_factory=dict)
     impls: List[ImplInfo] = field(default_factory=list)
     model: Optional[ModelSource] = None
+    # Every file imported under a name, in import order. Files that declare
+    # one namespace and are imported under its name merge: `ns.a` is
+    # whichever of them exports `a`.
+    namespace_sources: Dict[str, List[str]] = field(default_factory=dict)
+    namespace_targets: Dict[str, List[str]] = field(default_factory=dict)
+
+    def targets_of(self, name: Optional[str]) -> List[str]:
+        """The files imported under `name`, most often just one."""
+        if name is None:
+            return []
+        if name in self.namespace_targets:
+            return self.namespace_targets[name]
+        target = self.import_targets.get(name)
+        return [target] if target is not None else []
 
     @property
     def document(self) -> DocumentSnapshot:
@@ -231,7 +246,7 @@ class WorkspaceIndex:
                 (
                     package is not None
                     and (
-                        uri == (current.import_targets.get(package) if current else None)
+                        (current is not None and uri in current.targets_of(package))
                         or (
                             current is not None
                             and package not in current.import_targets
@@ -250,8 +265,9 @@ class WorkspaceIndex:
                     and current is not None
                     and receiver_name in BUILTIN_TYPE_NAMES
                     and uri in {
-                        current.import_targets.get(package_name)
+                        target
                         for package_name in current.imported_packages
+                        for target in current.targets_of(package_name)
                     }
                 )
                 or (

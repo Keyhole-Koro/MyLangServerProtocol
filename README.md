@@ -36,7 +36,9 @@ tokens. Go-to-definition resolves a const parameter use such as `data[N]` to
 its lexical `const N` declaration.
 The server resolves relative `.mln` imports and `@alias/...` imports (through
 the nearest `mylang.toml`'s `[alias]` table) for Hover, Signature Help, and
-go-to-definition. Completion is not implemented yet.
+go-to-definition. Files that declare one `namespace` and are imported under its
+name are searched together, so `dom.list_select()` finds whichever of them
+exports `list_select`. Completion is not implemented yet.
 
 Source locations from the native syntax checker are converted from UTF-8 byte
 columns to the UTF-16 positions used by LSP clients.

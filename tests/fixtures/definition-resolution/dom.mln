@@ -1,0 +1,2 @@
+namespace dom;
+export i32 create() { return 1; }
