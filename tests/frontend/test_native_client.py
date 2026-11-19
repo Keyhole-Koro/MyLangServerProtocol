@@ -86,6 +86,11 @@ def test_cache_limit_evicts_the_oldest_text(root: Path):
         assert [text for _command, text in exchanges(log)] == ["a", "b", "c"]
         client.query("a")
         assert [text for _command, text in exchanges(log)] == ["a", "b", "c", "a"]
+        # The hit on "b" made "c" the least recently used, so "a" evicted it.
+        client.query("b")
+        assert [text for _command, text in exchanges(log)] == ["a", "b", "c", "a"]
+        client.query("c")
+        assert [text for _command, text in exchanges(log)] == ["a", "b", "c", "a", "c"]
     finally:
         client.stop()
 
