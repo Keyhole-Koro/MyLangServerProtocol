@@ -66,7 +66,7 @@ def test_fixtures_are_mylang():
 def test_no_false_diagnostics():
     assert diagnostics_for(fixture_text("entity/world.model.mln")) == []
     # `Text` in a column is why the imports stay part of what is parsed.
-    assert diagnostics_for("package p;\nentity A max 4 { i32 x; }") == []
+    assert diagnostics_for("namespace p;\nentity A max 4 { i32 x; }") == []
     assert diagnostics_for("") == []
     for path in [
         "system/MyOS/src/ui/dom/dom_model.model.mln",
@@ -76,7 +76,7 @@ def test_no_false_diagnostics():
         assert diagnostics_for((REPO_ROOT / path).read_text(encoding="utf-8")) == [], path
 
 
-GOOD = "package p;\nentity A max 4 {\n    i32 x;\n    i32 y;\n}\nentity B max 4 { i32 z; }\n"
+GOOD = "namespace p;\nentity A max 4 {\n    i32 x;\n    i32 y;\n}\nentity B max 4 { i32 z; }\n"
 
 
 def test_real_errors():
@@ -97,7 +97,7 @@ def test_real_errors():
         ("entity A max 9999 { i32 x; }\n", "9999", "max must be between"),
         ("entity A 4 { i32 x; }\n", "A", "needs `max N`"),
         ("entity A max 4 i32 x;\n", "i32", "expected '{'"),
-        ("package p;\nentity A max 4 {\n    i32 x;\n    ;\n}\n", ";\n}", "malformed column"),
+        ("namespace p;\nentity A max 4 {\n    i32 x;\n    ;\n}\n", ";\n}", "malformed column"),
         # A line that is no declaration stays MyLang, and the parser finds it.
         (GOOD + "A hsa many B as bs;\n", "hsa", "Expected"),
         (GOOD + "garbage here there;\n", "here", "Expected"),
@@ -136,7 +136,7 @@ def test_errors_keep_the_server_going():
         assert server.syntax_diagnostics_for_uri(MODEL, GOOD) == []
         assert server.native_frontend.process is process and process.poll() is None
         # The words either side of a bad statement stay highlighted.
-        source = "package p;\nentity A max 4 { i32 x; }\nA has many C as cs;\nA knows one A as next;\n"
+        source = "namespace p;\nentity A max 4 { i32 x; }\nA has many C as cs;\nA knows one A as next;\n"
         decoded = tokens_by_line(server, MODEL, source)
         assert ("entity", "keyword") in decoded[1]
         assert ("has", "keyword") in decoded[2]

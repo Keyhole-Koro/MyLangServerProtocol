@@ -1,4 +1,4 @@
-package library;
+namespace library;
 export struct Counter { i32 x; };
 export i32 (Counter c) get() { return c.x; }
 export Counter *(Counter *c) me() { return c; }

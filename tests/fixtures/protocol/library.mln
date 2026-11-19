@@ -1,4 +1,4 @@
-package library;
+namespace library;
 /// Imported function.
 export i32 inc(i32 value) { return value + 1; }
 export enum Status { READY };

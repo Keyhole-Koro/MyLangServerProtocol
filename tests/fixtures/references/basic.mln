@@ -1,4 +1,4 @@
-package callbacks;
+namespace callbacks;
 i32 handle(i32 value) { return value; }
 void init() {
     install(handle);

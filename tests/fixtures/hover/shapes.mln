@@ -1,2 +1,2 @@
-package shapes;
+namespace shapes;
 export struct Rect { i32 width; i32 height; };

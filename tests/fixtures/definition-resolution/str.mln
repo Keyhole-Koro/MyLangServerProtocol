@@ -1,4 +1,4 @@
-package str;
+namespace str;
 export struct Text<const N> { u8 data[N]; i32 length; };
 export i32 (str self) len() { return self.length; }
 export str (char* self) as_str() { return str { data: self, length: 0 }; }

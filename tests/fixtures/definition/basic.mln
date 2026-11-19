@@ -1,4 +1,4 @@
-package demo;
+namespace demo;
 enum Color { RED, GREEN };
 struct Point { i32 x; };
 typedef i32 Count;

@@ -339,7 +339,7 @@ class FrontendBackend:
         }
         package = ""
         for index, token in enumerate(tokens[:-1]):
-            if token.kind in ("NAMESPACE", "PACKAGE") and tokens[index + 1].kind == "IDENTIFIER":
+            if token.kind == "NAMESPACE" and tokens[index + 1].kind == "IDENTIFIER":
                 package = tokens[index + 1].text
                 break
 

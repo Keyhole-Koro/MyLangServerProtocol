@@ -82,7 +82,6 @@ def decode_uri(server, uri, text):
 CLASSIFY_CASES = [
     (fixture_text("semantic/classify-function.mln"),
      {"add": "function", "a": "parameter", "b": "parameter", "Point": "type"}),
-    (fixture_text("semantic/classify-package.mln"), {"gfx": "namespace"}),
     (fixture_text("semantic/classify-namespace.mln"), {"gfx": "namespace"}),
     (fixture_text("semantic/classify-import.mln"), {"math": "namespace"}),
     (fixture_text("semantic/classify-struct.mln"), {"Point": "struct"}),
@@ -274,7 +273,7 @@ def run():
         # highlighting without feeding raw <Window> syntax to the MyLang grammar.
         mlx_uri = "file:///tmp/screen.mlx"
         mlx_src = (
-            "package main;\n"
+            "namespace main;\n"
             "DomNode* screen() {\n"
             "    return <Window title=\"Settings\" width={320}>\n"
             "        <Button text=\"OK\" onClick={handle_ok} />\n"

@@ -580,7 +580,7 @@ class LanguageFeatures:
     @staticmethod
     def _package_name(unit: AnalysisUnit) -> str:
         for index, token in enumerate(unit.tokens[:-1]):
-            if token.kind in ("NAMESPACE", "PACKAGE") and unit.tokens[index + 1].kind == "IDENTIFIER":
+            if token.kind == "NAMESPACE" and unit.tokens[index + 1].kind == "IDENTIFIER":
                 return unit.tokens[index + 1].text
         return ""
 

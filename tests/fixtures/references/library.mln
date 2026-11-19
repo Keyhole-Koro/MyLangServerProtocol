@@ -1,2 +1,2 @@
-package library;
+namespace library;
 export i32 callback(i32 value) { return value; }

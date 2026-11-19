@@ -1,4 +1,4 @@
-package world;
+namespace world;
 
 import { Text } from "@std/text/text.mln";
 
