@@ -22,6 +22,7 @@ MODULES = (
     "tests.protocol.test_lsp_protocol",
     "tests.protocol.test_compiler_check",
     "tests.protocol.test_stdio_protocol",
+    "tests.protocol.test_malformed_messages",
 )
 
 

@@ -147,8 +147,14 @@ class LspServer:
                     break
                 if msg is None:
                     break
+                if not isinstance(msg, dict):
+                    # LSP has no batches; skip anything that is not one message.
+                    continue
                 if msg.get("method") == "$/cancelRequest":
-                    request_id = msg.get("params", {}).get("id")
+                    params = msg.get("params")
+                    if not isinstance(params, dict):
+                        continue
+                    request_id = params.get("id")
                     with self.cancel_lock:
                         self.cancelled_requests.add(request_id)
                     continue
