@@ -12,6 +12,7 @@ MODULES = (
     "tests.frontend.test_doc_comments",
     "tests.frontend.test_semantic_tokens",
     "tests.frontend.test_line_endings",
+    "tests.frontend.test_native_client",
     "tests.interaction.test_hover",
     "tests.interaction.test_signature_help",
     "tests.navigation.test_definition",
