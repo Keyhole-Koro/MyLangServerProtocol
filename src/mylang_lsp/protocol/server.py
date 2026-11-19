@@ -7,21 +7,15 @@ from queue import PriorityQueue
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
 
-from ..analysis.documents import DocumentSnapshot, DocumentStore, LineMap
+from ..analysis.documents import DocumentSnapshot, DocumentStore
 from ..analysis.frontend import FrontendBackend
 from ..analysis.language_features import LanguageFeatures
 from ..analysis.models import WorkspaceIndex
-from ..features.diagnostics import DIAGNOSTIC_SEVERITY_ERROR, DiagnosticsService
-from ..features.document_symbols import (
-    ENGINE_SYMBOL_KIND,
-    SYMBOL_KIND,
-    DocumentSymbolService,
-)
+from ..features.diagnostics import DiagnosticsService
+from ..features.document_symbols import DocumentSymbolService
 from ..features.compiler_check import CompilerCheck
 from ..features.semantic_tokens import (
-    KIND_TO_TYPE,
     TOKEN_MODIFIERS,
-    TOKEN_TYPE_INDEX,
     TOKEN_TYPES,
     SemanticTokenService,
 )
