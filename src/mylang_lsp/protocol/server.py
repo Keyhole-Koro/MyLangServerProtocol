@@ -22,6 +22,12 @@ from ..features.semantic_tokens import (
 from ..frontend.native import NativeFrontendClient
 from ..source_text import is_protected, protected_spans, utf16_column
 
+
+def is_request_id(value: object) -> bool:
+    """JSON-RPC ids are numbers or strings; anything else cannot be tracked."""
+    return isinstance(value, (int, float, str))
+
+
 class LspServer:
     def __init__(self) -> None:
         self.document_store = DocumentStore()
@@ -144,15 +150,23 @@ class LspServer:
                 if not isinstance(msg, dict):
                     # LSP has no batches; skip anything that is not one message.
                     continue
-                if msg.get("method") == "$/cancelRequest":
+                method = msg.get("method")
+                if method is not None and not isinstance(method, str):
+                    continue
+                if msg.get("id") is not None and not is_request_id(msg["id"]):
+                    # The worker uses ids as set members; an unhashable id
+                    # would stop it and leave every later request unanswered.
+                    continue
+                if method == "$/cancelRequest":
                     params = msg.get("params")
                     if not isinstance(params, dict):
                         continue
                     request_id = params.get("id")
+                    if not is_request_id(request_id):
+                        continue
                     with self.cancel_lock:
                         self.cancelled_requests.add(request_id)
                     continue
-                method = msg.get("method")
                 if method in {
                     "textDocument/didOpen",
                     "textDocument/didChange",

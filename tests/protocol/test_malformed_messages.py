@@ -17,6 +17,10 @@ MALFORMED = {
     "batch array": [{"jsonrpc": "2.0", "id": 7, "method": "shutdown", "params": {}}],
     "bare number": 42,
     "bare string": "initialize",
+    "method is a list": {"jsonrpc": "2.0", "method": ["initialize"]},
+    "method is an object": {"jsonrpc": "2.0", "id": 3, "method": {}},
+    "cancel id is a list": {"jsonrpc": "2.0", "method": "$/cancelRequest", "params": {"id": [1]}},
+    "request id is a list": {"jsonrpc": "2.0", "id": [1], "method": "textDocument/hover", "params": {}},
 }
 
 
