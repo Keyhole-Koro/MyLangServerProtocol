@@ -16,7 +16,7 @@ from mylang_lsp.source_text import split_lines  # noqa: E402
 
 
 # Characters str.splitlines() treats as line breaks but LSP does not.
-NOT_LINE_ENDINGS = ("\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", " ", " ")
+NOT_LINE_ENDINGS = ("\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029")
 
 
 def no_frontend(text, uri=""):
