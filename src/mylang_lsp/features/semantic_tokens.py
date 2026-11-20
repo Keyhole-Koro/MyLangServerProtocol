@@ -4,7 +4,7 @@ import re
 from typing import Callable, Dict, List, Optional, Tuple
 
 from ..analysis.documents import LineMap
-from ..source_text import ProtectedSpans, protected_spans, utf16_column
+from ..source_text import ProtectedSpans, protected_spans, split_lines, utf16_column
 
 
 TOKEN_TYPES = [
@@ -55,7 +55,7 @@ class SemanticTokenService:
         self.query_frontend = query_frontend
 
     def encode(self, text: str, uri: str = "") -> List[int]:
-        lines = text.splitlines()
+        lines = split_lines(text)
         line_map = LineMap(text)
         protected = protected_spans(lines)
         base: Dict[Tuple[int, int], Tuple[int, str]] = {}

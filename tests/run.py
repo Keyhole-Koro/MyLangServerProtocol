@@ -11,6 +11,8 @@ MODULES = (
     "tests.frontend.test_lsp_model",
     "tests.frontend.test_doc_comments",
     "tests.frontend.test_semantic_tokens",
+    "tests.frontend.test_line_endings",
+    "tests.frontend.test_native_client",
     "tests.interaction.test_hover",
     "tests.interaction.test_signature_help",
     "tests.navigation.test_definition",
@@ -22,6 +24,7 @@ MODULES = (
     "tests.protocol.test_lsp_protocol",
     "tests.protocol.test_compiler_check",
     "tests.protocol.test_stdio_protocol",
+    "tests.protocol.test_malformed_messages",
 )
 
 

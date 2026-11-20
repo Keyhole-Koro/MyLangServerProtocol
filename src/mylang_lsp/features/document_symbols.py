@@ -3,6 +3,7 @@
 from typing import Callable, List, Optional
 
 from ..analysis.documents import LineMap
+from ..source_text import split_lines
 
 
 SYMBOL_KIND = {
@@ -33,7 +34,7 @@ class DocumentSymbolService:
         result = self.query_frontend(text, uri)
         if not result:
             return []
-        lines = text.splitlines()
+        lines = split_lines(text)
         line_map = LineMap(text)
         symbols = []
         for entry in result.get("symbols", []):

@@ -3,7 +3,7 @@
 from typing import Callable, List, Optional, Tuple
 
 from ..analysis.documents import LineMap
-from ..source_text import is_protected, protected_spans, utf16_column
+from ..source_text import is_protected, protected_spans, split_lines, utf16_column
 
 
 DIAGNOSTIC_SEVERITY_ERROR = 1
@@ -20,7 +20,7 @@ class DiagnosticsService:
         return self.frontend_diagnostics(text, uri)
 
     def bracket_diagnostics(self, text: str) -> List[dict]:
-        lines = text.splitlines()
+        lines = split_lines(text)
         protected = protected_spans(lines)
         stack: List[Tuple[str, int, int]] = []
         diagnostics: List[dict] = []
