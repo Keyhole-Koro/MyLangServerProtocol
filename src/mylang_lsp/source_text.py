@@ -1,9 +1,25 @@
 """Source-text utilities shared by diagnostics and semantic highlighting."""
 
+import re
 from typing import Dict, List, Tuple
 
 
 ProtectedSpans = Dict[int, List[Tuple[int, int]]]
+
+_LINE_ENDING = re.compile(r"\r\n|\r|\n")
+
+
+def split_lines(text: str) -> List[str]:
+    """Split like str.splitlines(), but only at the LSP line endings.
+
+    str.splitlines() also breaks at form feed, vertical tab, U+0085,
+    U+2028 and others, which editors and the native checker keep on the
+    same line, so line numbers would drift.
+    """
+    lines = _LINE_ENDING.split(text)
+    if lines[-1] == "":
+        lines.pop()
+    return lines
 
 
 def utf16_column(line: str, codepoint_column: int) -> int:
